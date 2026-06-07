@@ -588,6 +588,10 @@ impl RuntimeKeymap {
                 vim_normal.delete_char.as_slice(),
             ),
             (
+                keymap.vim_normal.substitute_char.as_ref(),
+                vim_normal.substitute_char.as_slice(),
+            ),
+            (
                 keymap.vim_normal.replace_char.as_ref(),
                 vim_normal.replace_char.as_slice(),
             ),
