@@ -1081,6 +1081,7 @@ impl ChatComposer {
             .map(|label| match label {
                 "Normal" => "Vim: Normal".magenta(),
                 "Insert" => "Vim: Insert".green(),
+                "Replace" => "Vim: Replace".red(),
                 _ => unreachable!(),
             })
     }

@@ -10,6 +10,8 @@ pub(super) enum VimMode {
     Normal,
     /// Insert mode routes input through the regular editor keymap until Escape is pressed.
     Insert,
+    /// Replace mode overwrites existing text until Escape is pressed.
+    Replace,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -27,6 +29,7 @@ pub(super) enum VimPending {
         operator: VimOperator,
         scope: VimTextObjectScope,
     },
+    ReplaceChar,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

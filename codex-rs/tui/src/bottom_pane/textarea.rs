@@ -49,6 +49,17 @@ fn is_word_separator(ch: char) -> bool {
     WORD_SEPARATORS.contains(ch)
 }
 
+fn printable_vim_char(event: KeyEvent) -> Option<char> {
+    match event {
+        KeyEvent {
+            code: KeyCode::Char(c),
+            modifiers: KeyModifiers::NONE | KeyModifiers::SHIFT,
+            ..
+        } if !c.is_ascii_control() => Some(c),
+        _ => None,
+    }
+}
+
 fn split_word_pieces(run: &str) -> Vec<(usize, &str)> {
     let mut pieces = Vec::new();
     for (segment_start, segment) in run.split_word_bound_indices() {
@@ -334,6 +345,7 @@ impl TextArea {
         Some(match self.vim_mode {
             VimMode::Normal => "Normal",
             VimMode::Insert => "Insert",
+            VimMode::Replace => "Replace",
         })
     }
 
@@ -624,21 +636,30 @@ impl TextArea {
     fn handle_vim_input(&mut self, event: KeyEvent) {
         match self.vim_mode {
             VimMode::Insert => self.handle_vim_insert(event),
+            VimMode::Replace => self.handle_vim_replace(event),
             VimMode::Normal => self.handle_vim_normal(event),
         }
     }
 
     fn handle_vim_insert(&mut self, event: KeyEvent) {
         if matches!(event.code, KeyCode::Esc) {
-            let bol = self.beginning_of_current_line();
-            if self.cursor_pos > bol {
-                self.cursor_pos = self.prev_atomic_boundary(self.cursor_pos).max(bol);
-            }
+            self.move_cursor_back_within_current_line();
             self.enter_vim_normal_mode();
             return;
         }
         let keymap = self.editor_keymap.clone();
         self.input_with_keymap(event, &keymap);
+    }
+
+    fn handle_vim_replace(&mut self, event: KeyEvent) {
+        if matches!(event.code, KeyCode::Esc) {
+            self.move_cursor_back_within_current_line();
+            self.enter_vim_normal_mode();
+            return;
+        }
+        if let Some(c) = printable_vim_char(event) {
+            self.replace_char_under_cursor(c);
+        }
     }
 
     fn handle_vim_normal(&mut self, event: KeyEvent) {
@@ -651,6 +672,10 @@ impl TextArea {
             }
             VimPending::TextObject { operator, scope } => {
                 self.handle_vim_text_object(operator, scope, event);
+                return;
+            }
+            VimPending::ReplaceChar => {
+                self.handle_vim_replace_char(event);
                 return;
             }
         }
@@ -743,6 +768,14 @@ impl TextArea {
             self.vim_mode = VimMode::Insert;
             return;
         }
+        if self.vim_normal_keymap.replace_char.is_pressed(event) {
+            self.vim_pending = VimPending::ReplaceChar;
+            return;
+        }
+        if self.vim_normal_keymap.enter_replace.is_pressed(event) {
+            self.vim_mode = VimMode::Replace;
+            return;
+        }
         if self.vim_normal_keymap.delete_to_line_end.is_pressed(event) {
             self.vim_kill_to_end_of_line();
             return;
@@ -812,6 +845,20 @@ impl TextArea {
             return true;
         }
         false
+    }
+
+    fn handle_vim_replace_char(&mut self, event: KeyEvent) -> bool {
+        if self.vim_operator_keymap.cancel.is_pressed(event) {
+            return true;
+        }
+        let Some(c) = printable_vim_char(event) else {
+            return false;
+        };
+        if self.cursor_pos < self.end_of_current_line() {
+            self.replace_char_under_cursor(c);
+            self.move_cursor_back_within_current_line();
+        }
+        return true;
     }
 
     fn handle_vim_text_object(
@@ -1052,6 +1099,23 @@ impl TextArea {
         let eol = self.end_of_current_line();
         if self.cursor_pos < eol {
             self.kill_range(self.cursor_pos..eol);
+        }
+    }
+
+    fn replace_char_under_cursor(&mut self, c: char) {
+        let eol = self.end_of_current_line();
+        if self.cursor_pos < eol {
+            let end = self.next_atomic_boundary(self.cursor_pos).min(eol);
+            self.replace_range_raw(self.cursor_pos..end, &c.to_string());
+        } else {
+            self.insert_str(&c.to_string());
+        }
+    }
+
+    fn move_cursor_back_within_current_line(&mut self) {
+        let bol = self.beginning_of_current_line();
+        if self.cursor_pos > bol {
+            self.cursor_pos = self.prev_atomic_boundary(self.cursor_pos).max(bol);
         }
     }
 
@@ -2398,6 +2462,60 @@ mod tests {
         assert_eq!(t.text(), "before\n\nnext");
         assert_eq!(t.cursor(), "before\n".len());
         assert_eq!(t.vim_mode_label(), Some("Insert"));
+    }
+
+    #[test]
+    fn vim_r_replaces_current_character_and_returns_to_normal_mode() {
+        let mut t = ta_with("abc");
+        t.set_cursor(/*pos*/ 1);
+        t.set_vim_enabled(/*enabled*/ true);
+
+        t.input(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
+        assert!(t.is_vim_operator_pending());
+
+        t.input(KeyEvent::new(KeyCode::Char('X'), KeyModifiers::NONE));
+
+        assert_eq!(t.text(), "aXc");
+        assert_eq!(t.cursor(), 1);
+        assert_eq!(t.vim_mode_label(), Some("Normal"));
+        assert!(!t.is_vim_operator_pending());
+    }
+
+    #[test]
+    fn vim_r_escape_cancels_replace_char() {
+        let mut t = ta_with("abc");
+        t.set_cursor(/*pos*/ 1);
+        t.set_vim_enabled(/*enabled*/ true);
+
+        t.input(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+        assert_eq!(t.text(), "abc");
+        assert_eq!(t.cursor(), 1);
+        assert_eq!(t.vim_mode_label(), Some("Normal"));
+        assert!(!t.is_vim_operator_pending());
+    }
+
+    #[test]
+    fn vim_uppercase_r_overwrites_until_escape() {
+        let mut t = ta_with("abc");
+        t.set_cursor(/*pos*/ 1);
+        t.set_vim_enabled(/*enabled*/ true);
+
+        t.input(KeyEvent::new(KeyCode::Char('R'), KeyModifiers::NONE));
+        assert_eq!(t.vim_mode_label(), Some("Replace"));
+
+        t.input(KeyEvent::new(KeyCode::Char('X'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('Y'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('Z'), KeyModifiers::NONE));
+
+        assert_eq!(t.text(), "aXYZ");
+        assert_eq!(t.cursor(), 4);
+
+        t.input(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+        assert_eq!(t.vim_mode_label(), Some("Normal"));
+        assert_eq!(t.cursor(), 3);
     }
 
     #[test]

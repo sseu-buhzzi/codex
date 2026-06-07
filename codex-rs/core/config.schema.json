@@ -2888,6 +2888,7 @@
               "delete_char": null,
               "delete_to_line_end": null,
               "enter_insert": null,
+              "enter_replace": null,
               "insert_line_start": null,
               "move_down": null,
               "move_left": null,
@@ -2901,6 +2902,7 @@
               "open_line_above": null,
               "open_line_below": null,
               "paste_after": null,
+              "replace_char": null,
               "start_change_operator": null,
               "start_delete_operator": null,
               "start_yank_operator": null,
@@ -3579,6 +3581,7 @@
             "delete_char": null,
             "delete_to_line_end": null,
             "enter_insert": null,
+            "enter_replace": null,
             "insert_line_start": null,
             "move_down": null,
             "move_left": null,
@@ -3592,6 +3595,7 @@
             "open_line_above": null,
             "open_line_below": null,
             "paste_after": null,
+            "replace_char": null,
             "start_change_operator": null,
             "start_delete_operator": null,
             "start_yank_operator": null,
@@ -3895,6 +3899,14 @@
           ],
           "description": "Enter insert mode at cursor (`i`)."
         },
+        "enter_replace": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Enter replace mode (`R`)."
+        },
         "insert_line_start": {
           "allOf": [
             {
@@ -3998,6 +4010,14 @@
             }
           ],
           "description": "Paste after cursor (`p`)."
+        },
+        "replace_char": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Replace the character under cursor with the next typed character (`r`)."
         },
         "start_change_operator": {
           "allOf": [
