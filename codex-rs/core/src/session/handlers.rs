@@ -565,8 +565,13 @@ pub async fn thread_rollback(sess: &Arc<Session>, sub_id: String, num_turns: u32
         .into_iter()
         .chain(std::iter::once(RolloutItem::EventMsg(rollback_msg.clone())))
         .collect::<Vec<_>>();
-    sess.apply_rollout_reconstruction(turn_context.as_ref(), replay_items.as_slice())
+    let (_, window_id) = sess
+        .apply_rollout_reconstruction(turn_context.as_ref(), replay_items.as_slice())
         .await;
+    {
+        let mut state = sess.state.lock().await;
+        state.set_auto_compact_window_id(window_id);
+    }
     sess.recompute_token_usage(turn_context.as_ref()).await;
 
     sess.persist_rollout_items(&[RolloutItem::EventMsg(rollback_msg.clone())])

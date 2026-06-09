@@ -1207,7 +1207,23 @@ impl Session {
         state.clear_connector_selection();
     }
 
+    #[cfg(test)]
     async fn record_initial_history(&self, conversation_history: InitialHistory) {
+        self.record_initial_history_with_reconstruction(
+            conversation_history,
+            /*precomputed_resumed_reconstruction*/ None,
+        )
+        .await;
+    }
+
+    async fn record_initial_history_with_reconstruction(
+        &self,
+        conversation_history: InitialHistory,
+        mut precomputed_resumed_reconstruction: Option<(
+            Arc<TurnContext>,
+            rollout_reconstruction::RolloutReconstruction,
+        )>,
+    ) {
         let is_subagent = {
             let state = self.state.lock().await;
             state
@@ -1228,11 +1244,29 @@ impl Session {
                     .await;
             }
             InitialHistory::Resumed(resumed_history) => {
-                let turn_context = self.new_default_turn().await;
+                let (turn_context, reconstructed_rollout) =
+                    if let Some(precomputed_resumed_reconstruction) =
+                        precomputed_resumed_reconstruction.take()
+                    {
+                        precomputed_resumed_reconstruction
+                    } else {
+                        let turn_context = self.new_default_turn().await;
+                        let reconstructed_rollout = self
+                            .reconstruct_history_from_rollout(
+                                &turn_context,
+                                &resumed_history.history,
+                            )
+                            .await;
+                        (turn_context, reconstructed_rollout)
+                    };
                 let rollout_items = resumed_history.history;
-                let previous_turn_settings = self
-                    .apply_rollout_reconstruction(&turn_context, &rollout_items)
+                let (previous_turn_settings, window_id) = self
+                    .apply_reconstructed_rollout(&turn_context, reconstructed_rollout)
                     .await;
+                {
+                    let mut state = self.state.lock().await;
+                    state.set_auto_compact_window_id(window_id);
+                }
 
                 // If resuming, warn when the last recorded model differs from the current one.
                 let curr: &str = turn_context.model_info.slug.as_str();
@@ -1299,11 +1333,21 @@ impl Session {
         &self,
         turn_context: &TurnContext,
         rollout_items: &[RolloutItem],
-    ) -> Option<PreviousTurnSettings> {
+    ) -> (Option<PreviousTurnSettings>, u64) {
         let reconstructed_rollout = self
             .reconstruct_history_from_rollout(turn_context, rollout_items)
             .await;
-        let previous_turn_settings = reconstructed_rollout.previous_turn_settings.clone();
+        self.apply_reconstructed_rollout(turn_context, reconstructed_rollout)
+            .await
+    }
+
+    async fn apply_reconstructed_rollout(
+        &self,
+        turn_context: &TurnContext,
+        reconstructed_rollout: rollout_reconstruction::RolloutReconstruction,
+    ) -> (Option<PreviousTurnSettings>, u64) {
+        let previous_turn_settings = reconstructed_rollout.previous_turn_settings;
+        let window_id = reconstructed_rollout.window_id;
         self.replace_history(
             reconstructed_rollout.history,
             reconstructed_rollout.reference_context_item,
@@ -1325,7 +1369,7 @@ impl Session {
         }
         self.set_previous_turn_settings(previous_turn_settings.clone())
             .await;
-        previous_turn_settings
+        (previous_turn_settings, window_id)
     }
 
     async fn set_auto_compact_window_estimated_prefill_for_scope(
@@ -2669,13 +2713,14 @@ impl Session {
         &self,
         items: Vec<ResponseItem>,
         reference_context_item: Option<TurnContextItem>,
-        compacted_item: CompactedItem,
+        mut compacted_item: CompactedItem,
     ) {
         {
             let mut state = self.state.lock().await;
             state.replace_history(items, reference_context_item.clone());
-            state.start_next_auto_compact_window();
         }
+
+        compacted_item.window_id = Some(self.advance_auto_compact_window_id().await);
 
         self.persist_rollout_items(&[RolloutItem::Compacted(compacted_item)])
             .await;
@@ -2687,7 +2732,6 @@ impl Session {
             let mut state = self.state.lock().await;
             state.queue_pending_session_start_source(codex_hooks::SessionStartSource::Compact);
         }
-        self.services.model_client.advance_window_generation();
     }
 
     async fn persist_rollout_response_items(&self, items: &[ResponseItem]) {
@@ -2992,6 +3036,22 @@ impl Session {
     pub(crate) async fn clone_history(&self) -> ContextManager {
         let state = self.state.lock().await;
         state.clone_history()
+    }
+
+    pub(crate) async fn current_window_id(&self) -> String {
+        let state = self.state.lock().await;
+        let thread_id = self.thread_id;
+        let window_id = state.auto_compact_window_id();
+        format!("{thread_id}:{window_id}")
+    }
+
+    async fn advance_auto_compact_window_id(&self) -> u64 {
+        let window_id = {
+            let mut state = self.state.lock().await;
+            state.advance_auto_compact_window_id()
+        };
+        self.services.model_client.clear_cached_websocket_session();
+        window_id
     }
 
     pub(crate) async fn reference_context_item(&self) -> Option<TurnContextItem> {
