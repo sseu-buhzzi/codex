@@ -8,10 +8,9 @@
 
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::ops::Deref;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::Mutex;
-use std::sync::PoisonError;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
@@ -109,14 +108,9 @@ pub fn tool_is_model_visible(tool: &ToolInfo) -> bool {
 
 /// A thin wrapper around a set of running [`RmcpClient`] instances.
 pub struct McpConnectionManager {
-    clients: HashMap<String, AsyncManagedClient>,
-    servers: HashMap<String, EffectiveMcpServer>,
+    clients: HashMap<String, McpServerConnection>,
     server_metadata: HashMap<String, McpServerMetadata>,
     required_servers: Vec<String>,
-    startup_context: Option<McpClientStartupContext>,
-    startup_generation: Arc<Mutex<u64>>,
-    tx_event: Sender<Event>,
-    codex_home: PathBuf,
     tool_plugin_provenance: Arc<ToolPluginProvenance>,
     host_owned_codex_apps_enabled: bool,
     prefix_mcp_tool_names: bool,
@@ -126,6 +120,8 @@ pub struct McpConnectionManager {
 /// Inputs that may change when a session refreshes its MCP configuration.
 pub struct McpConnectionRefresh {
     pub servers: HashMap<String, EffectiveMcpServer>,
+    pub tx_event: Sender<Event>,
+    pub codex_home: PathBuf,
     pub store_mode: OAuthCredentialsStoreMode,
     pub auth_entries: HashMap<String, McpAuthStatusEntry>,
     pub submit_id: String,
@@ -143,33 +139,28 @@ struct McpClientStartupContext {
     store_mode: OAuthCredentialsStoreMode,
     runtime_context: McpRuntimeContext,
     client_elicitation_capability: ElicitationCapability,
-    server_environments: HashMap<String, Option<Arc<Environment>>>,
+    environment: Option<Arc<Environment>>,
 }
 
 impl McpClientStartupContext {
     fn new(
+        server_name: &str,
+        server: &EffectiveMcpServer,
         store_mode: OAuthCredentialsStoreMode,
         runtime_context: McpRuntimeContext,
         client_elicitation_capability: ElicitationCapability,
-        servers: &HashMap<String, EffectiveMcpServer>,
     ) -> Self {
-        let server_environments = servers
-            .iter()
-            .map(|(name, server)| {
-                let environment = server.configured_config().and_then(|config| {
-                    runtime_context
-                        .resolve_server_environment(name, config)
-                        .ok()
-                        .flatten()
-                });
-                (name.clone(), environment)
-            })
-            .collect();
+        let environment = server.configured_config().and_then(|config| {
+            runtime_context
+                .resolve_server_environment(server_name, config)
+                .ok()
+                .flatten()
+        });
         Self {
             store_mode,
             runtime_context,
             client_elicitation_capability,
-            server_environments,
+            environment,
         }
     }
 
@@ -177,17 +168,27 @@ impl McpClientStartupContext {
         self.store_mode == other.store_mode
             && self.runtime_context.matches(&other.runtime_context)
             && self.client_elicitation_capability == other.client_elicitation_capability
+            && match (&self.environment, &other.environment) {
+                (Some(current), Some(updated)) => Arc::ptr_eq(current, updated),
+                (None, None) => true,
+                (Some(_), None) | (None, Some(_)) => false,
+            }
     }
+}
 
-    fn server_environment_matches(&self, server_name: &str, other: &Self) -> bool {
-        match (
-            self.server_environments.get(server_name),
-            other.server_environments.get(server_name),
-        ) {
-            (Some(Some(current)), Some(Some(updated))) => Arc::ptr_eq(current, updated),
-            (Some(None), Some(None)) => true,
-            (Some(_), Some(_)) | (None, Some(_)) | (Some(_), None) | (None, None) => false,
-        }
+#[derive(Clone)]
+struct McpServerConnection {
+    client: AsyncManagedClient,
+    server: EffectiveMcpServer,
+    startup_context: McpClientStartupContext,
+    startup_round: CancellationToken,
+}
+
+impl Deref for McpServerConnection {
+    type Target = AsyncManagedClient;
+
+    fn deref(&self) -> &Self::Target {
+        &self.client
     }
 }
 
@@ -218,13 +219,8 @@ impl McpConnectionManager {
         );
         let mut manager = Self {
             clients: HashMap::new(),
-            servers: HashMap::new(),
             server_metadata: HashMap::new(),
             required_servers: Vec::new(),
-            startup_context: None,
-            startup_generation: Arc::new(Mutex::new(0)),
-            tx_event,
-            codex_home,
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             host_owned_codex_apps_enabled,
             prefix_mcp_tool_names,
@@ -232,6 +228,8 @@ impl McpConnectionManager {
         };
         let cleanup = manager.refresh(McpConnectionRefresh {
             servers: mcp_servers.clone(),
+            tx_event,
+            codex_home,
             store_mode,
             auth_entries,
             submit_id,
@@ -257,6 +255,8 @@ impl McpConnectionManager {
     ) -> impl std::future::Future<Output = ()> + Send + 'static {
         let McpConnectionRefresh {
             servers,
+            tx_event,
+            codex_home,
             store_mode,
             auth_entries,
             submit_id,
@@ -268,14 +268,10 @@ impl McpConnectionManager {
             tool_plugin_provenance,
             auth,
         } = refresh;
-        // Serialize startup rounds so a superseded client cannot publish a terminal update after
-        // the replacement round begins.
-        let mut startup_generation = self
-            .startup_generation
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        *startup_generation = (*startup_generation).wrapping_add(1);
-        let generation = *startup_generation;
+        for connection in self.clients.values() {
+            connection.startup_round.cancel();
+        }
+        let startup_round = CancellationToken::new();
         let mut required_servers = servers
             .iter()
             .filter(|(_, server)| server.enabled() && server.required())
@@ -286,67 +282,70 @@ impl McpConnectionManager {
             .into_iter()
             .filter(|(_, server)| server.enabled())
             .collect::<HashMap<_, _>>();
-        let startup_context = McpClientStartupContext::new(
-            store_mode,
-            runtime_context,
-            client_elicitation_capability,
-            &servers,
-        );
-        let restart_all = self
-            .startup_context
-            .as_ref()
-            .is_some_and(|current| !current.matches(&startup_context));
         let retired_names = self
             .clients
-            .keys()
-            .filter(|name| {
-                restart_all
-                    || name.as_str() == CODEX_APPS_MCP_SERVER_NAME
-                    || self.clients.get(*name).is_some_and(|client| {
-                        client.cancel_token.is_cancelled() || client.startup_failed()
-                    })
-                    || self.startup_context.as_ref().is_some_and(|current| {
-                        !current.server_environment_matches(name, &startup_context)
-                    })
-                    || servers.get(*name) != self.servers.get(*name)
+            .iter()
+            .filter(|(name, connection)| {
+                let Some(server) = servers.get(*name) else {
+                    return true;
+                };
+                let startup_context = McpClientStartupContext::new(
+                    name,
+                    server,
+                    store_mode,
+                    runtime_context.clone(),
+                    client_elicitation_capability.clone(),
+                );
+                name.as_str() == CODEX_APPS_MCP_SERVER_NAME
+                    || connection.cancel_token.is_cancelled()
+                    || connection.startup_failed()
+                    || connection.server != *server
+                    || !connection.startup_context.matches(&startup_context)
             })
-            .cloned()
+            .map(|(name, _)| name.clone())
             .collect::<Vec<_>>();
         let mut retired_clients = Vec::with_capacity(retired_names.len());
-        for name in retired_names {
-            if let Some(client) = self.clients.remove(&name) {
-                client.cancel_token.cancel();
-                retired_clients.push(client);
+        for name in &retired_names {
+            if let Some(connection) = self.clients.remove(name) {
+                connection.cancel_token.cancel();
+                retired_clients.push(connection);
             }
         }
 
-        self.servers = servers;
-        self.server_metadata = self
-            .servers
+        self.server_metadata = servers
             .iter()
             .map(|(name, server)| (name.clone(), McpServerMetadata::from(server)))
             .collect();
         self.required_servers = required_servers;
-        self.startup_context = Some(startup_context.clone());
         self.tool_plugin_provenance = Arc::new(tool_plugin_provenance);
         self.host_owned_codex_apps_enabled = host_owned_codex_apps_enabled;
         self.prefix_mcp_tool_names = prefix_mcp_tool_names;
+        for connection in self.clients.values_mut() {
+            connection.startup_round = startup_round.clone();
+        }
 
         let codex_apps_auth_provider = auth
             .as_ref()
             .filter(|auth| auth.uses_codex_backend())
             .map(codex_model_provider::auth_provider_from_auth);
         let mut join_set = JoinSet::new();
-        for (server_name, server) in &self.servers {
+        for (server_name, server) in &servers {
             if self.clients.contains_key(server_name) {
                 continue;
             }
             let server_name = server_name.clone();
             let server = server.clone();
+            let startup_context = McpClientStartupContext::new(
+                &server_name,
+                &server,
+                store_mode,
+                runtime_context.clone(),
+                client_elicitation_capability.clone(),
+            );
             let cancel_token = CancellationToken::new();
             let codex_apps_tools_cache_context = if server_name == CODEX_APPS_MCP_SERVER_NAME {
                 Some(CodexAppsToolsCacheContext {
-                    codex_home: self.codex_home.clone(),
+                    codex_home: codex_home.clone(),
                     user_key: codex_apps_tools_cache_key.clone(),
                 })
             } else {
@@ -370,35 +369,42 @@ impl McpConnectionManager {
                 };
             let async_managed_client = AsyncManagedClient::new(
                 server_name.clone(),
-                server,
+                server.clone(),
                 startup_context.store_mode,
                 cancel_token.clone(),
-                self.tx_event.clone(),
+                tx_event.clone(),
                 self.elicitation_requests.new_request_scope(),
                 codex_apps_tools_cache_context,
                 startup_context.runtime_context.clone(),
                 runtime_auth_provider,
                 startup_context.client_elicitation_capability.clone(),
             );
-            self.clients
-                .insert(server_name.clone(), async_managed_client.clone());
+            self.clients.insert(
+                server_name,
+                McpServerConnection {
+                    client: async_managed_client,
+                    server,
+                    startup_context,
+                    startup_round: startup_round.clone(),
+                },
+            );
         }
-        for (server_name, async_managed_client) in &self.clients {
+        for (server_name, connection) in &self.clients {
             let _ = emit_update(
                 submit_id.as_str(),
-                &self.tx_event,
+                &tx_event,
                 McpStartupUpdateEvent {
                     server: server_name.clone(),
                     status: McpStartupStatus::Starting,
                 },
             );
             let server_name = server_name.clone();
-            let async_managed_client = async_managed_client.clone();
+            let async_managed_client = connection.client.clone();
             let cancel_token = async_managed_client.cancel_token.clone();
-            let tx_event = self.tx_event.clone();
+            let tx_event = tx_event.clone();
+            let startup_round = connection.startup_round.clone();
             let startup_submit_id = submit_id.clone();
             let auth_entry = auth_entries.get(&server_name).cloned();
-            let startup_generation = Arc::clone(&self.startup_generation);
             join_set.spawn(async move {
                 let mut outcome = async_managed_client.client().await;
                 if cancel_token.is_cancelled() {
@@ -417,10 +423,7 @@ impl McpConnectionManager {
                     }
                 };
 
-                let current_generation = startup_generation
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner);
-                if *current_generation == generation {
+                if !startup_round.is_cancelled() {
                     let _ = emit_update(
                         startup_submit_id.as_str(),
                         &tx_event,
@@ -434,8 +437,7 @@ impl McpConnectionManager {
                 (server_name, outcome)
             });
         }
-        let tx_event = self.tx_event.clone();
-        let startup_generation_state = Arc::clone(&self.startup_generation);
+        let startup_round = startup_round.clone();
         tokio::spawn(async move {
             let outcomes = join_set.join_all().await;
             let mut summary = McpStartupCompleteEvent::default();
@@ -451,17 +453,13 @@ impl McpConnectionManager {
                     }
                 }
             }
-            let current_generation = startup_generation_state
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner);
-            if *current_generation == generation {
+            if !startup_round.is_cancelled() {
                 let _ = tx_event.try_send(Event {
                     id: submit_id,
                     msg: EventMsg::McpStartupComplete(summary),
                 });
             }
         });
-        drop(startup_generation);
 
         async move {
             for client in retired_clients {
@@ -521,17 +519,10 @@ impl McpConnectionManager {
         permission_profile: &PermissionProfile,
         prefix_mcp_tool_names: bool,
     ) -> Self {
-        let (tx_event, rx_event) = async_channel::unbounded();
-        drop(rx_event);
         Self {
             clients: HashMap::new(),
-            servers: HashMap::new(),
             server_metadata: HashMap::new(),
             required_servers: Vec::new(),
-            startup_context: None,
-            startup_generation: Arc::new(Mutex::new(0)),
-            tx_event,
-            codex_home: PathBuf::new(),
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             host_owned_codex_apps_enabled: false,
             prefix_mcp_tool_names,
@@ -554,7 +545,6 @@ impl McpConnectionManager {
         for client in clients.values() {
             client.cancel_token.cancel();
         }
-        self.servers.clear();
         self.server_metadata.clear();
         async move {
             for client in clients.into_values() {

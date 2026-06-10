@@ -153,6 +153,32 @@ fn cancellable_pending_client() -> AsyncManagedClient {
     }
 }
 
+fn insert_test_client(
+    manager: &mut McpConnectionManager,
+    server_name: &str,
+    client: AsyncManagedClient,
+) {
+    let server = configured_stdio_server(server_name);
+    manager.clients.insert(
+        server_name.to_string(),
+        McpServerConnection {
+            client,
+            startup_context: McpClientStartupContext::new(
+                server_name,
+                &server,
+                OAuthCredentialsStoreMode::default(),
+                McpRuntimeContext::new(
+                    Arc::new(EnvironmentManager::without_environments()),
+                    PathBuf::from("/tmp"),
+                ),
+                ElicitationCapability::default(),
+            ),
+            server,
+            startup_round: CancellationToken::new(),
+        },
+    );
+}
+
 fn test_elicitation_requests() -> ElicitationRequestManager {
     ElicitationRequestManager::new(
         AskForApproval::Never,
@@ -869,8 +895,9 @@ async fn list_all_tools_uses_cached_tool_info_snapshot_while_client_is_pending()
         &permission_profile,
         /*prefix_mcp_tool_names*/ true,
     );
-    manager.clients.insert(
-        CODEX_APPS_MCP_SERVER_NAME.to_string(),
+    insert_test_client(
+        &mut manager,
+        CODEX_APPS_MCP_SERVER_NAME,
         AsyncManagedClient {
             client: pending_client,
             cached_tool_info_snapshot: Some(startup_tools),
@@ -906,8 +933,9 @@ async fn list_available_server_infos_uses_cache_while_client_is_pending() {
         /*prefix_mcp_tool_names*/ true,
     );
     let server_info = create_test_server_info("Codex Apps");
-    manager.clients.insert(
-        CODEX_APPS_MCP_SERVER_NAME.to_string(),
+    insert_test_client(
+        &mut manager,
+        CODEX_APPS_MCP_SERVER_NAME,
         AsyncManagedClient {
             client: pending_client,
             cached_tool_info_snapshot: Some(Vec::new()),
@@ -943,8 +971,9 @@ async fn list_all_tools_accepts_canonical_namespaced_tool_names() {
         &permission_profile,
         /*prefix_mcp_tool_names*/ false,
     );
-    manager.clients.insert(
-        "rmcp".to_string(),
+    insert_test_client(
+        &mut manager,
+        "rmcp",
         AsyncManagedClient {
             client: pending_client,
             cached_tool_info_snapshot: Some(startup_tools),
@@ -986,8 +1015,9 @@ async fn list_all_tools_applies_legacy_mcp_prefix_by_default() {
         &permission_profile,
         /*prefix_mcp_tool_names*/ true,
     );
-    manager.clients.insert(
-        "rmcp".to_string(),
+    insert_test_client(
+        &mut manager,
+        "rmcp",
         AsyncManagedClient {
             client: pending_client,
             cached_tool_info_snapshot: Some(startup_tools),
@@ -1028,8 +1058,9 @@ async fn list_all_tools_blocks_while_client_is_pending_without_cached_tool_info_
         &permission_profile,
         /*prefix_mcp_tool_names*/ true,
     );
-    manager.clients.insert(
-        CODEX_APPS_MCP_SERVER_NAME.to_string(),
+    insert_test_client(
+        &mut manager,
+        CODEX_APPS_MCP_SERVER_NAME,
         AsyncManagedClient {
             client: pending_client,
             cached_tool_info_snapshot: None,
@@ -1057,8 +1088,9 @@ async fn list_all_tools_does_not_block_when_cached_tool_info_snapshot_is_empty()
         &permission_profile,
         /*prefix_mcp_tool_names*/ true,
     );
-    manager.clients.insert(
-        CODEX_APPS_MCP_SERVER_NAME.to_string(),
+    insert_test_client(
+        &mut manager,
+        CODEX_APPS_MCP_SERVER_NAME,
         AsyncManagedClient {
             client: pending_client,
             cached_tool_info_snapshot: Some(Vec::new()),
@@ -1097,8 +1129,9 @@ async fn list_all_tools_uses_cached_tool_info_snapshot_when_client_startup_fails
         /*prefix_mcp_tool_names*/ true,
     );
     let startup_complete = Arc::new(std::sync::atomic::AtomicBool::new(true));
-    manager.clients.insert(
-        CODEX_APPS_MCP_SERVER_NAME.to_string(),
+    insert_test_client(
+        &mut manager,
+        CODEX_APPS_MCP_SERVER_NAME,
         AsyncManagedClient {
             client: failed_client,
             cached_tool_info_snapshot: Some(startup_tools),
@@ -1152,8 +1185,9 @@ async fn list_all_tools_adds_server_metadata_to_cached_tools() {
             supports_parallel_tool_calls: true,
         },
     );
-    manager.clients.insert(
-        server_name.to_string(),
+    insert_test_client(
+        &mut manager,
+        server_name,
         AsyncManagedClient {
             client: pending_client,
             cached_tool_info_snapshot: Some(startup_tools),
@@ -1187,7 +1221,7 @@ async fn refresh_reuses_unchanged_clients_and_retires_only_changed_connections()
         .expect("add remote environment");
     let runtime_context =
         McpRuntimeContext::new(Arc::clone(&environment_manager), PathBuf::from("/tmp"));
-    manager.servers = HashMap::from([
+    let servers = HashMap::from([
         (
             "unchanged".to_string(),
             configured_stdio_server("unchanged"),
@@ -1203,16 +1237,24 @@ async fn refresh_reuses_unchanged_clients_and_retires_only_changed_connections()
             configured_stdio_server_in_environment("environment", "remote"),
         ),
     ]);
-    manager.startup_context = Some(McpClientStartupContext::new(
-        OAuthCredentialsStoreMode::default(),
-        runtime_context.clone(),
-        ElicitationCapability::default(),
-        &manager.servers,
-    ));
-    for name in manager.servers.keys() {
-        manager
-            .clients
-            .insert(name.clone(), cancellable_pending_client());
+    let startup_round = CancellationToken::new();
+    for (name, server) in servers {
+        let startup_context = McpClientStartupContext::new(
+            &name,
+            &server,
+            OAuthCredentialsStoreMode::default(),
+            runtime_context.clone(),
+            ElicitationCapability::default(),
+        );
+        manager.clients.insert(
+            name,
+            McpServerConnection {
+                client: cancellable_pending_client(),
+                server,
+                startup_context,
+                startup_round: startup_round.clone(),
+            },
+        );
     }
     let unchanged_startup = Arc::clone(&manager.clients["unchanged"].startup_complete);
     let cancelled_startup = Arc::clone(&manager.clients["cancelled"].startup_complete);
@@ -1228,6 +1270,8 @@ async fn refresh_reuses_unchanged_clients_and_retires_only_changed_connections()
     environment_manager
         .upsert_environment("remote".to_string(), "http://127.0.0.1:2".to_string())
         .expect("replace remote environment");
+    let (tx_event, rx_event) = async_channel::unbounded();
+    drop(rx_event);
 
     let cleanup = manager.refresh(McpConnectionRefresh {
         servers: HashMap::from([
@@ -1246,6 +1290,8 @@ async fn refresh_reuses_unchanged_clients_and_retires_only_changed_connections()
                 configured_stdio_server_in_environment("environment", "remote"),
             ),
         ]),
+        tx_event,
+        codex_home: PathBuf::new(),
         store_mode: OAuthCredentialsStoreMode::default(),
         auth_entries: HashMap::new(),
         submit_id: String::new(),
