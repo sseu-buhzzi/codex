@@ -359,7 +359,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_mcp_manager(
         tools = mcp_connection_manager.list_all_tools().await;
     }
     if codex_apps_ready {
-        cancel_token.cancel();
+        mcp_connection_manager.cancel_startup();
     }
 
     let accessible_connectors = codex_connectors::filter::filter_disallowed_connectors(
