@@ -226,6 +226,8 @@ pub struct TuiVimNormalKeymap {
     pub move_line_end: Option<KeybindingsSpec>,
     /// Delete character under cursor (`x`).
     pub delete_char: Option<KeybindingsSpec>,
+    /// Delete character before cursor (`X`).
+    pub delete_char_backward: Option<KeybindingsSpec>,
     /// Delete character under cursor and enter insert mode (`s`).
     pub substitute_char: Option<KeybindingsSpec>,
     /// Replace the character under cursor with the next typed character (`r`).

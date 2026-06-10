@@ -2886,6 +2886,7 @@
               "cancel_operator": null,
               "change_to_line_end": null,
               "delete_char": null,
+              "delete_char_backward": null,
               "delete_to_line_end": null,
               "enter_insert": null,
               "enter_replace": null,
@@ -3580,6 +3581,7 @@
             "cancel_operator": null,
             "change_to_line_end": null,
             "delete_char": null,
+            "delete_char_backward": null,
             "delete_to_line_end": null,
             "enter_insert": null,
             "enter_replace": null,
@@ -3884,6 +3886,14 @@
             }
           ],
           "description": "Delete character under cursor (`x`)."
+        },
+        "delete_char_backward": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Delete character before cursor (`X`)."
         },
         "delete_to_line_end": {
           "allOf": [

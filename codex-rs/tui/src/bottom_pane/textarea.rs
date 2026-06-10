@@ -761,6 +761,14 @@ impl TextArea {
             self.delete_forward_kill(/*n*/ 1);
             return;
         }
+        if self
+            .vim_normal_keymap
+            .delete_char_backward
+            .is_pressed(event)
+        {
+            self.delete_backward_kill(/*n*/ 1);
+            return;
+        }
         if self.vim_normal_keymap.substitute_char.is_pressed(event) {
             if self.cursor_pos < self.end_of_current_line() {
                 self.delete_forward_kill(/*n*/ 1);
@@ -1044,6 +1052,20 @@ impl TextArea {
             }
         }
         self.replace_range(self.cursor_pos..target, "");
+    }
+
+    pub fn delete_backward_kill(&mut self, n: usize) {
+        if n == 0 || self.cursor_pos == 0 {
+            return;
+        }
+        let mut target = self.cursor_pos;
+        for _ in 0..n {
+            target = self.prev_atomic_boundary(target);
+            if target == 0 {
+                break;
+            }
+        }
+        self.kill_range(target..self.cursor_pos);
     }
 
     pub fn delete_forward_kill(&mut self, n: usize) {
@@ -2460,6 +2482,47 @@ mod tests {
         assert_eq!(t.text(), "hello \nnext line");
         assert_eq!(t.vim_mode_label(), Some("Insert"));
         assert_eq!(t.cursor(), 6);
+    }
+
+    #[test]
+    fn vim_uppercase_x_deletes_character_before_cursor() {
+        let mut t = ta_with("abc");
+        t.set_cursor(/*pos*/ 2);
+        t.set_vim_enabled(/*enabled*/ true);
+
+        t.input(KeyEvent::new(KeyCode::Char('X'), KeyModifiers::NONE));
+
+        assert_eq!(t.text(), "ac");
+        assert_eq!(t.cursor(), 1);
+        assert_eq!(t.kill_buffer, "b");
+        assert_eq!(t.vim_mode_label(), Some("Normal"));
+    }
+
+    #[test]
+    fn vim_uppercase_x_does_not_cross_line_start() {
+        let mut t = ta_with("abc\ndef");
+        t.set_cursor(/*pos*/ "abc\n".len());
+        t.set_vim_enabled(/*enabled*/ true);
+
+        t.input(KeyEvent::new(KeyCode::Char('X'), KeyModifiers::NONE));
+
+        assert_eq!(t.text(), "abc\ndef");
+        assert_eq!(t.cursor(), "abc\n".len());
+        assert_eq!(t.kill_buffer, "");
+    }
+
+    #[test]
+    fn vim_shift_x_deletes_character_before_cursor_with_shift_only_binding() {
+        let mut t = ta_with("abc");
+        t.vim_normal_keymap.delete_char_backward = vec![key_hint::shift(KeyCode::Char('x'))];
+        t.set_cursor(/*pos*/ 2);
+        t.set_vim_enabled(/*enabled*/ true);
+
+        t.input(KeyEvent::new(KeyCode::Char('X'), KeyModifiers::NONE));
+
+        assert_eq!(t.text(), "ac");
+        assert_eq!(t.cursor(), 1);
+        assert_eq!(t.kill_buffer, "b");
     }
 
     #[test]

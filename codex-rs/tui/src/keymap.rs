@@ -160,6 +160,7 @@ pub(crate) struct VimNormalKeymap {
     pub(crate) move_line_start: Vec<KeyBinding>,
     pub(crate) move_line_end: Vec<KeyBinding>,
     pub(crate) delete_char: Vec<KeyBinding>,
+    pub(crate) delete_char_backward: Vec<KeyBinding>,
     pub(crate) substitute_char: Vec<KeyBinding>,
     pub(crate) replace_char: Vec<KeyBinding>,
     pub(crate) enter_replace: Vec<KeyBinding>,
@@ -500,6 +501,12 @@ impl RuntimeKeymap {
             move_line_start: resolve_local!(keymap, defaults, vim_normal, move_line_start),
             move_line_end: resolve_local!(keymap, defaults, vim_normal, move_line_end),
             delete_char: resolve_local!(keymap, defaults, vim_normal, delete_char),
+            delete_char_backward: resolve_local!(
+                keymap,
+                defaults,
+                vim_normal,
+                delete_char_backward
+            ),
             substitute_char: resolve_local!(keymap, defaults, vim_normal, substitute_char),
             replace_char: resolve_local!(keymap, defaults, vim_normal, replace_char),
             enter_replace: resolve_local!(keymap, defaults, vim_normal, enter_replace),
@@ -589,6 +596,10 @@ impl RuntimeKeymap {
                 vim_normal.delete_char.as_slice(),
             ),
             (
+                keymap.vim_normal.delete_char_backward.as_ref(),
+                vim_normal.delete_char_backward.as_slice(),
+            ),
+            (
                 keymap.vim_normal.substitute_char.as_ref(),
                 vim_normal.substitute_char.as_slice(),
             ),
@@ -642,6 +653,11 @@ impl RuntimeKeymap {
         if keymap.vim_normal.substitute_char.is_none() {
             vim_normal
                 .substitute_char
+                .retain(|binding| !configured_vim_normal_bindings_to_preserve.contains(binding));
+        }
+        if keymap.vim_normal.delete_char_backward.is_none() {
+            vim_normal
+                .delete_char_backward
                 .retain(|binding| !configured_vim_normal_bindings_to_preserve.contains(binding));
         }
         if keymap.vim_normal.replace_char.is_none() {
@@ -1061,6 +1077,10 @@ impl RuntimeKeymap {
                     shift(KeyCode::Char('$'))
                 ],
                 delete_char: default_bindings![plain(KeyCode::Char('x'))],
+                delete_char_backward: default_bindings![
+                    shift(KeyCode::Char('x')),
+                    plain(KeyCode::Char('X'))
+                ],
                 substitute_char: default_bindings![plain(KeyCode::Char('s'))],
                 replace_char: default_bindings![plain(KeyCode::Char('r'))],
                 enter_replace: default_bindings![
@@ -1512,6 +1532,10 @@ impl RuntimeKeymap {
                 ),
                 ("move_line_end", self.vim_normal.move_line_end.as_slice()),
                 ("delete_char", self.vim_normal.delete_char.as_slice()),
+                (
+                    "delete_char_backward",
+                    self.vim_normal.delete_char_backward.as_slice(),
+                ),
                 (
                     "substitute_char",
                     self.vim_normal.substitute_char.as_slice(),
