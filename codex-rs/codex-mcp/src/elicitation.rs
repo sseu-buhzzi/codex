@@ -72,6 +72,7 @@ impl ElicitationRequestManager {
         }
     }
 
+    /// Starts an empty responder scope while retaining the current policy and reviewer state.
     pub(crate) fn new_request_scope(&self) -> Self {
         Self {
             requests: Arc::new(Mutex::new(HashMap::new())),

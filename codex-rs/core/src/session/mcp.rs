@@ -337,6 +337,8 @@ impl Session {
                 turn_context.cwd.to_path_buf(),
             ),
         };
+        // Keep the installed manager reachable while replacing its connections. Wait for old
+        // clients to shut down only after releasing the manager lock.
         let cleanup = {
             let mut manager = self.services.mcp_connection_manager.write().await;
             manager.refresh(McpConnectionRefresh {

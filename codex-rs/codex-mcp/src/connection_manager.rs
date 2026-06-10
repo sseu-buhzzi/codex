@@ -115,6 +115,9 @@ pub struct McpConnectionManager {
 }
 
 /// Inputs used to replace the manager's MCP server connections.
+///
+/// These values describe one refresh round and are passed in rather than retained by the
+/// manager.
 pub struct McpConnectionRefresh<'a> {
     pub servers: HashMap<String, EffectiveMcpServer>,
     pub store_mode: OAuthCredentialsStoreMode,
@@ -132,6 +135,10 @@ pub struct McpConnectionRefresh<'a> {
 }
 
 impl McpConnectionManager {
+    /// Creates a manager and installs its initial MCP connection set.
+    ///
+    /// Startup continues asynchronously. Required-server readiness is validated separately after
+    /// the manager is installed so elicitation responses can reach it during initialization.
     #[allow(clippy::too_many_arguments)]
     pub async fn new(
         mcp_servers: &HashMap<String, EffectiveMcpServer>,
@@ -185,7 +192,11 @@ impl McpConnectionManager {
         manager
     }
 
-    /// Replaces the current MCP server connections while preserving manager-owned state.
+    /// Replaces all MCP server connections while preserving manager-owned policy state.
+    ///
+    /// The manager remains installed so elicitation responses keep reaching the active request
+    /// scope. Each refresh starts a new cancellation and responder scope, which prevents pending
+    /// responders and terminal startup events from the previous round leaking into the new one.
     ///
     /// The returned future shuts down the replaced clients and should be awaited after releasing
     /// any lock around the manager.
@@ -208,6 +219,8 @@ impl McpConnectionManager {
             tool_plugin_provenance,
             auth,
         } = refresh;
+        // A refresh starts a distinct startup and elicitation round while retaining the policy
+        // state shared across rounds.
         self.startup_cancellation_token.cancel();
         self.startup_cancellation_token = CancellationToken::new();
         self.elicitation_requests = self.elicitation_requests.new_request_scope();
@@ -420,7 +433,7 @@ impl McpConnectionManager {
         !self.clients.is_empty()
     }
 
-    /// Cancels MCP clients that are still starting.
+    /// Cancels the active startup round without shutting down clients that are already ready.
     pub fn cancel_startup(&self) {
         self.startup_cancellation_token.cancel();
     }
