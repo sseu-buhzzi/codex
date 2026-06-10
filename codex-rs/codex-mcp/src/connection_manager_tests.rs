@@ -37,8 +37,6 @@ use rmcp::model::NumberOrString;
 use rmcp::model::Tool;
 use std::collections::HashSet;
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
 use tempfile::tempdir;
 
 fn create_test_tool(server_name: &str, tool_name: &str) -> ToolInfo {
@@ -96,95 +94,6 @@ fn create_test_server_info(title: &str) -> McpServerInfo {
         icons: None,
         website_url: None,
     }
-}
-
-fn configured_stdio_server(command: &str) -> EffectiveMcpServer {
-    configured_stdio_server_in_environment(command, codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID)
-}
-
-fn configured_stdio_server_in_environment(
-    command: &str,
-    environment_id: &str,
-) -> EffectiveMcpServer {
-    EffectiveMcpServer::configured(McpServerConfig {
-        transport: McpServerTransportConfig::Stdio {
-            command: command.to_string(),
-            args: Vec::new(),
-            env: None,
-            env_vars: Vec::new(),
-            cwd: None,
-        },
-        environment_id: environment_id.to_string(),
-        enabled: true,
-        required: false,
-        supports_parallel_tool_calls: false,
-        disabled_reason: None,
-        startup_timeout_sec: None,
-        tool_timeout_sec: None,
-        default_tools_approval_mode: None,
-        enabled_tools: None,
-        disabled_tools: None,
-        scopes: None,
-        oauth: None,
-        oauth_resource: None,
-        tools: HashMap::new(),
-    })
-}
-
-fn cancellable_pending_client() -> AsyncManagedClient {
-    let cancel_token = CancellationToken::new();
-    let cancellation = cancel_token.clone();
-    let startup_complete = Arc::new(AtomicBool::new(false));
-    let startup_complete_for_future = Arc::clone(&startup_complete);
-    let client = async move {
-        cancellation.cancelled().await;
-        startup_complete_for_future.store(true, Ordering::Release);
-        Err(StartupOutcomeError::Cancelled)
-    }
-    .boxed()
-    .shared();
-    AsyncManagedClient {
-        client,
-        cached_tool_info_snapshot: None,
-        cached_server_info: None,
-        startup_complete,
-        elicitation_requests: test_elicitation_requests(),
-        cancel_token,
-    }
-}
-
-fn insert_test_client(
-    manager: &mut McpConnectionManager,
-    server_name: &str,
-    client: AsyncManagedClient,
-) {
-    let server = configured_stdio_server(server_name);
-    manager.clients.insert(
-        server_name.to_string(),
-        McpServerConnection {
-            client,
-            startup_context: McpClientStartupContext::new(
-                server_name,
-                &server,
-                OAuthCredentialsStoreMode::default(),
-                McpRuntimeContext::new(
-                    Arc::new(EnvironmentManager::without_environments()),
-                    PathBuf::from("/tmp"),
-                ),
-                ElicitationCapability::default(),
-            ),
-            server,
-            startup_round: CancellationToken::new(),
-        },
-    );
-}
-
-fn test_elicitation_requests() -> ElicitationRequestManager {
-    ElicitationRequestManager::new(
-        AskForApproval::Never,
-        PermissionProfile::default(),
-        /*reviewer*/ None,
-    )
 }
 
 fn model_tool_names(tools: &[ToolInfo]) -> HashSet<ToolName> {
@@ -895,15 +804,14 @@ async fn list_all_tools_uses_cached_tool_info_snapshot_while_client_is_pending()
         &permission_profile,
         /*prefix_mcp_tool_names*/ true,
     );
-    insert_test_client(
-        &mut manager,
-        CODEX_APPS_MCP_SERVER_NAME,
+    manager.clients.insert(
+        CODEX_APPS_MCP_SERVER_NAME.to_string(),
         AsyncManagedClient {
             client: pending_client,
             cached_tool_info_snapshot: Some(startup_tools),
             cached_server_info: None,
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            elicitation_requests: test_elicitation_requests(),
+            tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             cancel_token: CancellationToken::new(),
         },
     );
@@ -933,15 +841,14 @@ async fn list_available_server_infos_uses_cache_while_client_is_pending() {
         /*prefix_mcp_tool_names*/ true,
     );
     let server_info = create_test_server_info("Codex Apps");
-    insert_test_client(
-        &mut manager,
-        CODEX_APPS_MCP_SERVER_NAME,
+    manager.clients.insert(
+        CODEX_APPS_MCP_SERVER_NAME.to_string(),
         AsyncManagedClient {
             client: pending_client,
             cached_tool_info_snapshot: Some(Vec::new()),
             cached_server_info: Some(server_info.clone()),
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            elicitation_requests: test_elicitation_requests(),
+            tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             cancel_token: CancellationToken::new(),
         },
     );
@@ -971,15 +878,14 @@ async fn list_all_tools_accepts_canonical_namespaced_tool_names() {
         &permission_profile,
         /*prefix_mcp_tool_names*/ false,
     );
-    insert_test_client(
-        &mut manager,
-        "rmcp",
+    manager.clients.insert(
+        "rmcp".to_string(),
         AsyncManagedClient {
             client: pending_client,
             cached_tool_info_snapshot: Some(startup_tools),
             cached_server_info: None,
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            elicitation_requests: test_elicitation_requests(),
+            tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             cancel_token: CancellationToken::new(),
         },
     );
@@ -1015,15 +921,14 @@ async fn list_all_tools_applies_legacy_mcp_prefix_by_default() {
         &permission_profile,
         /*prefix_mcp_tool_names*/ true,
     );
-    insert_test_client(
-        &mut manager,
-        "rmcp",
+    manager.clients.insert(
+        "rmcp".to_string(),
         AsyncManagedClient {
             client: pending_client,
             cached_tool_info_snapshot: Some(startup_tools),
             cached_server_info: None,
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            elicitation_requests: test_elicitation_requests(),
+            tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             cancel_token: CancellationToken::new(),
         },
     );
@@ -1058,15 +963,14 @@ async fn list_all_tools_blocks_while_client_is_pending_without_cached_tool_info_
         &permission_profile,
         /*prefix_mcp_tool_names*/ true,
     );
-    insert_test_client(
-        &mut manager,
-        CODEX_APPS_MCP_SERVER_NAME,
+    manager.clients.insert(
+        CODEX_APPS_MCP_SERVER_NAME.to_string(),
         AsyncManagedClient {
             client: pending_client,
             cached_tool_info_snapshot: None,
             cached_server_info: None,
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            elicitation_requests: test_elicitation_requests(),
+            tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             cancel_token: CancellationToken::new(),
         },
     );
@@ -1088,15 +992,14 @@ async fn list_all_tools_does_not_block_when_cached_tool_info_snapshot_is_empty()
         &permission_profile,
         /*prefix_mcp_tool_names*/ true,
     );
-    insert_test_client(
-        &mut manager,
-        CODEX_APPS_MCP_SERVER_NAME,
+    manager.clients.insert(
+        CODEX_APPS_MCP_SERVER_NAME.to_string(),
         AsyncManagedClient {
             client: pending_client,
             cached_tool_info_snapshot: Some(Vec::new()),
             cached_server_info: None,
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            elicitation_requests: test_elicitation_requests(),
+            tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             cancel_token: CancellationToken::new(),
         },
     );
@@ -1129,15 +1032,14 @@ async fn list_all_tools_uses_cached_tool_info_snapshot_when_client_startup_fails
         /*prefix_mcp_tool_names*/ true,
     );
     let startup_complete = Arc::new(std::sync::atomic::AtomicBool::new(true));
-    insert_test_client(
-        &mut manager,
-        CODEX_APPS_MCP_SERVER_NAME,
+    manager.clients.insert(
+        CODEX_APPS_MCP_SERVER_NAME.to_string(),
         AsyncManagedClient {
             client: failed_client,
             cached_tool_info_snapshot: Some(startup_tools),
             cached_server_info: Some(server_info.clone()),
             startup_complete,
-            elicitation_requests: test_elicitation_requests(),
+            tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             cancel_token: CancellationToken::new(),
         },
     );
@@ -1185,15 +1087,14 @@ async fn list_all_tools_adds_server_metadata_to_cached_tools() {
             supports_parallel_tool_calls: true,
         },
     );
-    insert_test_client(
-        &mut manager,
-        server_name,
+    manager.clients.insert(
+        server_name.to_string(),
         AsyncManagedClient {
             client: pending_client,
             cached_tool_info_snapshot: Some(startup_tools),
             cached_server_info: None,
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            elicitation_requests: test_elicitation_requests(),
+            tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             cancel_token: CancellationToken::new(),
         },
     );
@@ -1204,167 +1105,6 @@ async fn list_all_tools_adds_server_metadata_to_cached_tools() {
     assert_eq!(tool.server_name, server_name);
     assert!(tool.supports_parallel_tool_calls);
     assert_eq!(tool.server_origin.as_deref(), Some("https://docs.example"));
-}
-
-#[tokio::test]
-async fn refresh_reuses_unchanged_clients_and_retires_only_changed_connections() {
-    let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
-    let permission_profile = Constrained::allow_any(PermissionProfile::default());
-    let mut manager = McpConnectionManager::new_uninitialized(
-        &approval_policy,
-        &permission_profile,
-        /*prefix_mcp_tool_names*/ true,
-    );
-    let environment_manager = Arc::new(EnvironmentManager::without_environments());
-    environment_manager
-        .upsert_environment("remote".to_string(), "http://127.0.0.1:1".to_string())
-        .expect("add remote environment");
-    let runtime_context =
-        McpRuntimeContext::new(Arc::clone(&environment_manager), PathBuf::from("/tmp"));
-    let servers = HashMap::from([
-        (
-            "unchanged".to_string(),
-            configured_stdio_server("unchanged"),
-        ),
-        (
-            "cancelled".to_string(),
-            configured_stdio_server("cancelled"),
-        ),
-        ("changed".to_string(), configured_stdio_server("before")),
-        ("removed".to_string(), configured_stdio_server("removed")),
-        (
-            "environment".to_string(),
-            configured_stdio_server_in_environment("environment", "remote"),
-        ),
-    ]);
-    let startup_round = CancellationToken::new();
-    for (name, server) in servers {
-        let startup_context = McpClientStartupContext::new(
-            &name,
-            &server,
-            OAuthCredentialsStoreMode::default(),
-            runtime_context.clone(),
-            ElicitationCapability::default(),
-        );
-        manager.clients.insert(
-            name,
-            McpServerConnection {
-                client: cancellable_pending_client(),
-                server,
-                startup_context,
-                startup_round: startup_round.clone(),
-            },
-        );
-    }
-    let unchanged_startup = Arc::clone(&manager.clients["unchanged"].startup_complete);
-    let cancelled_startup = Arc::clone(&manager.clients["cancelled"].startup_complete);
-    let changed_startup = Arc::clone(&manager.clients["changed"].startup_complete);
-    let removed_startup = Arc::clone(&manager.clients["removed"].startup_complete);
-    let environment_startup = Arc::clone(&manager.clients["environment"].startup_complete);
-    let unchanged_cancel = manager.clients["unchanged"].cancel_token.clone();
-    let cancelled_cancel = manager.clients["cancelled"].cancel_token.clone();
-    let changed_cancel = manager.clients["changed"].cancel_token.clone();
-    let removed_cancel = manager.clients["removed"].cancel_token.clone();
-    let environment_cancel = manager.clients["environment"].cancel_token.clone();
-    cancelled_cancel.cancel();
-    environment_manager
-        .upsert_environment("remote".to_string(), "http://127.0.0.1:2".to_string())
-        .expect("replace remote environment");
-    let (tx_event, rx_event) = async_channel::unbounded();
-    drop(rx_event);
-
-    let cleanup = manager.refresh(McpConnectionRefresh {
-        servers: HashMap::from([
-            (
-                "unchanged".to_string(),
-                configured_stdio_server("unchanged"),
-            ),
-            (
-                "cancelled".to_string(),
-                configured_stdio_server("cancelled"),
-            ),
-            ("changed".to_string(), configured_stdio_server("after")),
-            ("added".to_string(), configured_stdio_server("added")),
-            (
-                "environment".to_string(),
-                configured_stdio_server_in_environment("environment", "remote"),
-            ),
-        ]),
-        tx_event,
-        codex_home: PathBuf::new(),
-        store_mode: OAuthCredentialsStoreMode::default(),
-        auth_entries: HashMap::new(),
-        submit_id: String::new(),
-        runtime_context: McpRuntimeContext::new(environment_manager, PathBuf::from("/tmp")),
-        codex_apps_tools_cache_key: CodexAppsToolsCacheKey {
-            account_id: None,
-            chatgpt_user_id: None,
-            is_workspace_account: false,
-        },
-        host_owned_codex_apps_enabled: false,
-        prefix_mcp_tool_names: true,
-        client_elicitation_capability: ElicitationCapability::default(),
-        tool_plugin_provenance: ToolPluginProvenance::default(),
-        auth: None,
-    });
-
-    assert_eq!(
-        (
-            manager.clients.keys().cloned().collect::<HashSet<_>>(),
-            Arc::ptr_eq(
-                &unchanged_startup,
-                &manager.clients["unchanged"].startup_complete
-            ),
-            Arc::ptr_eq(
-                &cancelled_startup,
-                &manager.clients["cancelled"].startup_complete
-            ),
-            Arc::ptr_eq(
-                &changed_startup,
-                &manager.clients["changed"].startup_complete
-            ),
-            Arc::ptr_eq(
-                &environment_startup,
-                &manager.clients["environment"].startup_complete
-            ),
-            unchanged_cancel.is_cancelled(),
-            manager.clients["cancelled"].cancel_token.is_cancelled(),
-            changed_cancel.is_cancelled(),
-            manager.clients["changed"].cancel_token.is_cancelled(),
-            environment_cancel.is_cancelled(),
-            removed_cancel.is_cancelled(),
-        ),
-        (
-            HashSet::from([
-                "added".to_string(),
-                "cancelled".to_string(),
-                "changed".to_string(),
-                "environment".to_string(),
-                "unchanged".to_string(),
-            ]),
-            true,
-            false,
-            false,
-            false,
-            false,
-            false,
-            true,
-            false,
-            true,
-            true,
-        )
-    );
-
-    cleanup.await;
-    assert_eq!(
-        (
-            cancelled_startup.load(Ordering::Acquire),
-            changed_startup.load(Ordering::Acquire),
-            removed_startup.load(Ordering::Acquire),
-        ),
-        (true, true, true)
-    );
-    manager.shutdown().await;
 }
 
 #[tokio::test]
@@ -1475,6 +1215,7 @@ async fn no_local_runtime_fails_local_stdio_but_keeps_local_http_server() {
         startup_outcome_error_message(error),
         "local stdio MCP server `stdio` requires a local environment"
     );
+    cancel_token.cancel();
 }
 
 #[test]

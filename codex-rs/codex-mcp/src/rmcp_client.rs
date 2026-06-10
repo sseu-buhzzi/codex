@@ -6,6 +6,7 @@
 //! Higher-level aggregation and resource/tool APIs live in
 //! [`crate::connection_manager`].
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::env;
 use std::ffi::OsString;
@@ -27,6 +28,7 @@ use crate::codex_apps::normalize_codex_apps_tool_title;
 use crate::codex_apps::write_cached_codex_apps_tools_if_needed;
 use crate::elicitation::ElicitationRequestManager;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
+use crate::mcp::ToolPluginProvenance;
 use crate::runtime::McpRuntimeContext;
 use crate::runtime::emit_duration;
 use crate::server::EffectiveMcpServer;
@@ -127,7 +129,7 @@ pub(crate) struct AsyncManagedClient {
     pub(crate) cached_tool_info_snapshot: Option<Vec<ToolInfo>>,
     pub(crate) cached_server_info: Option<McpServerInfo>,
     pub(crate) startup_complete: Arc<AtomicBool>,
-    pub(crate) elicitation_requests: ElicitationRequestManager,
+    pub(crate) tool_plugin_provenance: Arc<ToolPluginProvenance>,
     pub(crate) cancel_token: CancellationToken,
 }
 
@@ -143,6 +145,7 @@ impl AsyncManagedClient {
         tx_event: Sender<Event>,
         elicitation_requests: ElicitationRequestManager,
         codex_apps_tools_cache_context: Option<CodexAppsToolsCacheContext>,
+        tool_plugin_provenance: Arc<ToolPluginProvenance>,
         runtime_context: McpRuntimeContext,
         runtime_auth_provider: Option<SharedAuthProvider>,
         client_elicitation_capability: ElicitationCapability,
@@ -165,7 +168,6 @@ impl AsyncManagedClient {
         let startup_complete = Arc::new(AtomicBool::new(false));
         let startup_complete_for_fut = Arc::clone(&startup_complete);
         let cancel_token_for_fut = cancel_token.clone();
-        let elicitation_requests_for_fut = elicitation_requests.clone();
         let fut = async move {
             let outcome = match async {
                 if let Err(error) = validate_mcp_server_name(&server_name) {
@@ -196,7 +198,7 @@ impl AsyncManagedClient {
                             .unwrap_or(DEFAULT_TOOL_TIMEOUT),
                         tool_filter: startup_tool_filter,
                         tx_event,
-                        elicitation_requests: elicitation_requests_for_fut,
+                        elicitation_requests,
                         codex_apps_tools_cache_context,
                         client_elicitation_capability,
                     },
@@ -226,20 +228,13 @@ impl AsyncManagedClient {
             cached_tool_info_snapshot,
             cached_server_info,
             startup_complete,
-            elicitation_requests,
+            tool_plugin_provenance,
             cancel_token,
         }
     }
 
     pub(crate) async fn client(&self) -> Result<ManagedClient, StartupOutcomeError> {
         self.client.clone().await
-    }
-
-    pub(crate) fn startup_failed(&self) -> bool {
-        self.client
-            .clone()
-            .now_or_never()
-            .is_some_and(|outcome| outcome.is_err())
     }
 
     pub(crate) async fn shutdown(&self) {
@@ -261,6 +256,58 @@ impl AsyncManagedClient {
     }
 
     pub(crate) async fn listed_tools(&self) -> Option<Vec<ToolInfo>> {
+        let annotate_tools = |tools: Vec<ToolInfo>| {
+            let mut tools = tools;
+            for tool in &mut tools {
+                if tool.server_name == CODEX_APPS_MCP_SERVER_NAME {
+                    tool.tool = tool_with_model_visible_input_schema(&tool.tool);
+                }
+
+                let plugin_names = match tool.connector_id.as_deref() {
+                    Some(connector_id) => self
+                        .tool_plugin_provenance
+                        .plugin_display_names_for_connector_id(connector_id),
+                    None => self
+                        .tool_plugin_provenance
+                        .plugin_display_names_for_mcp_server_name(tool.server_name.as_str()),
+                };
+                tool.plugin_display_names = plugin_names.to_vec();
+
+                if plugin_names.is_empty() {
+                    continue;
+                }
+
+                let plugin_source_note = if plugin_names.len() == 1 {
+                    format!("This tool is part of plugin `{}`.", plugin_names[0])
+                } else {
+                    format!(
+                        "This tool is part of plugins {}.",
+                        plugin_names
+                            .iter()
+                            .map(|plugin_name| format!("`{plugin_name}`"))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                };
+                let description = tool
+                    .tool
+                    .description
+                    .as_deref()
+                    .map(str::trim)
+                    .unwrap_or("");
+                let annotated_description = if description.is_empty() {
+                    plugin_source_note
+                } else if matches!(description.chars().last(), Some('.' | '!' | '?')) {
+                    format!("{description} {plugin_source_note}")
+                } else {
+                    format!("{description}. {plugin_source_note}")
+                };
+                tool.tool.description = Some(Cow::Owned(annotated_description));
+            }
+            tools
+        };
+
+        // Keep cache payloads raw; plugin provenance is resolved per-session at read time.
         let tools = if let Some(startup_tools) = self.cached_tool_info_snapshot_while_initializing()
         {
             Some(startup_tools)
@@ -270,14 +317,7 @@ impl AsyncManagedClient {
                 Err(_) => self.cached_tool_info_snapshot.clone(),
             }
         };
-        tools.map(|mut tools| {
-            for tool in &mut tools {
-                if tool.server_name == CODEX_APPS_MCP_SERVER_NAME {
-                    tool.tool = tool_with_model_visible_input_schema(&tool.tool);
-                }
-            }
-            tools
-        })
+        tools.map(annotate_tools)
     }
 }
 

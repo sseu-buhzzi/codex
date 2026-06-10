@@ -55,10 +55,6 @@ impl McpRuntimeContext {
         self.local_stdio_fallback_cwd.clone()
     }
 
-    pub(crate) fn matches(&self, other: &Self) -> bool {
-        self.local_stdio_fallback_cwd == other.local_stdio_fallback_cwd
-    }
-
     pub(crate) fn resolve_server_environment(
         &self,
         server_name: &str,

@@ -358,6 +358,10 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_mcp_manager(
     if should_reload_tools {
         tools = mcp_connection_manager.list_all_tools().await;
     }
+    if codex_apps_ready {
+        cancel_token.cancel();
+    }
+
     let accessible_connectors = codex_connectors::filter::filter_disallowed_connectors(
         accessible_connectors_from_mcp_tools(&tools),
         originator().value.as_str(),

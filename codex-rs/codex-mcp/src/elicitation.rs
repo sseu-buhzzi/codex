@@ -72,6 +72,16 @@ impl ElicitationRequestManager {
         }
     }
 
+    pub(crate) fn new_request_scope(&self) -> Self {
+        Self {
+            requests: Arc::new(Mutex::new(HashMap::new())),
+            approval_policy: Arc::clone(&self.approval_policy),
+            permission_profile: Arc::clone(&self.permission_profile),
+            auto_deny: Arc::clone(&self.auto_deny),
+            reviewer: self.reviewer.clone(),
+        }
+    }
+
     pub(crate) fn auto_deny(&self) -> bool {
         self.auto_deny
             .lock()
@@ -82,16 +92,6 @@ impl ElicitationRequestManager {
     pub(crate) fn set_auto_deny(&self, auto_deny: bool) {
         if let Ok(mut current) = self.auto_deny.lock() {
             *current = auto_deny;
-        }
-    }
-
-    pub(crate) fn new_request_scope(&self) -> Self {
-        Self {
-            requests: Arc::new(Mutex::new(HashMap::new())),
-            approval_policy: Arc::clone(&self.approval_policy),
-            permission_profile: Arc::clone(&self.permission_profile),
-            auto_deny: Arc::clone(&self.auto_deny),
-            reviewer: self.reviewer.clone(),
         }
     }
 
