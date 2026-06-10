@@ -85,6 +85,16 @@ impl ElicitationRequestManager {
         }
     }
 
+    pub(crate) fn new_request_scope(&self) -> Self {
+        Self {
+            requests: Arc::new(Mutex::new(HashMap::new())),
+            approval_policy: Arc::clone(&self.approval_policy),
+            permission_profile: Arc::clone(&self.permission_profile),
+            auto_deny: Arc::clone(&self.auto_deny),
+            reviewer: self.reviewer.clone(),
+        }
+    }
+
     pub(crate) async fn resolve(
         &self,
         server_name: String,

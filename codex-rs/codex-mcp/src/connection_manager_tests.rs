@@ -37,6 +37,8 @@ use rmcp::model::NumberOrString;
 use rmcp::model::Tool;
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use tempfile::tempdir;
 
 fn create_test_tool(server_name: &str, tool_name: &str) -> ToolInfo {
@@ -94,6 +96,62 @@ fn create_test_server_info(title: &str) -> McpServerInfo {
         icons: None,
         website_url: None,
     }
+}
+
+fn configured_stdio_server(command: &str) -> EffectiveMcpServer {
+    EffectiveMcpServer::configured(McpServerConfig {
+        transport: McpServerTransportConfig::Stdio {
+            command: command.to_string(),
+            args: Vec::new(),
+            env: None,
+            env_vars: Vec::new(),
+            cwd: None,
+        },
+        environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
+        enabled: true,
+        required: false,
+        supports_parallel_tool_calls: false,
+        disabled_reason: None,
+        startup_timeout_sec: None,
+        tool_timeout_sec: None,
+        default_tools_approval_mode: None,
+        enabled_tools: None,
+        disabled_tools: None,
+        scopes: None,
+        oauth: None,
+        oauth_resource: None,
+        tools: HashMap::new(),
+    })
+}
+
+fn cancellable_pending_client() -> AsyncManagedClient {
+    let cancel_token = CancellationToken::new();
+    let cancellation = cancel_token.clone();
+    let startup_complete = Arc::new(AtomicBool::new(false));
+    let startup_complete_for_future = Arc::clone(&startup_complete);
+    let client = async move {
+        cancellation.cancelled().await;
+        startup_complete_for_future.store(true, Ordering::Release);
+        Err(StartupOutcomeError::Cancelled)
+    }
+    .boxed()
+    .shared();
+    AsyncManagedClient {
+        client,
+        cached_tool_info_snapshot: None,
+        cached_server_info: None,
+        startup_complete,
+        elicitation_requests: test_elicitation_requests(),
+        cancel_token,
+    }
+}
+
+fn test_elicitation_requests() -> ElicitationRequestManager {
+    ElicitationRequestManager::new(
+        AskForApproval::Never,
+        PermissionProfile::default(),
+        /*reviewer*/ None,
+    )
 }
 
 fn model_tool_names(tools: &[ToolInfo]) -> HashSet<ToolName> {
@@ -811,7 +869,7 @@ async fn list_all_tools_uses_cached_tool_info_snapshot_while_client_is_pending()
             cached_tool_info_snapshot: Some(startup_tools),
             cached_server_info: None,
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
+            elicitation_requests: test_elicitation_requests(),
             cancel_token: CancellationToken::new(),
         },
     );
@@ -848,7 +906,7 @@ async fn list_available_server_infos_uses_cache_while_client_is_pending() {
             cached_tool_info_snapshot: Some(Vec::new()),
             cached_server_info: Some(server_info.clone()),
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
+            elicitation_requests: test_elicitation_requests(),
             cancel_token: CancellationToken::new(),
         },
     );
@@ -885,7 +943,7 @@ async fn list_all_tools_accepts_canonical_namespaced_tool_names() {
             cached_tool_info_snapshot: Some(startup_tools),
             cached_server_info: None,
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
+            elicitation_requests: test_elicitation_requests(),
             cancel_token: CancellationToken::new(),
         },
     );
@@ -928,7 +986,7 @@ async fn list_all_tools_applies_legacy_mcp_prefix_by_default() {
             cached_tool_info_snapshot: Some(startup_tools),
             cached_server_info: None,
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
+            elicitation_requests: test_elicitation_requests(),
             cancel_token: CancellationToken::new(),
         },
     );
@@ -970,7 +1028,7 @@ async fn list_all_tools_blocks_while_client_is_pending_without_cached_tool_info_
             cached_tool_info_snapshot: None,
             cached_server_info: None,
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
+            elicitation_requests: test_elicitation_requests(),
             cancel_token: CancellationToken::new(),
         },
     );
@@ -999,7 +1057,7 @@ async fn list_all_tools_does_not_block_when_cached_tool_info_snapshot_is_empty()
             cached_tool_info_snapshot: Some(Vec::new()),
             cached_server_info: None,
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
+            elicitation_requests: test_elicitation_requests(),
             cancel_token: CancellationToken::new(),
         },
     );
@@ -1039,7 +1097,7 @@ async fn list_all_tools_uses_cached_tool_info_snapshot_when_client_startup_fails
             cached_tool_info_snapshot: Some(startup_tools),
             cached_server_info: Some(server_info.clone()),
             startup_complete,
-            tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
+            elicitation_requests: test_elicitation_requests(),
             cancel_token: CancellationToken::new(),
         },
     );
@@ -1094,7 +1152,7 @@ async fn list_all_tools_adds_server_metadata_to_cached_tools() {
             cached_tool_info_snapshot: Some(startup_tools),
             cached_server_info: None,
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
+            elicitation_requests: test_elicitation_requests(),
             cancel_token: CancellationToken::new(),
         },
     );
@@ -1105,6 +1163,113 @@ async fn list_all_tools_adds_server_metadata_to_cached_tools() {
     assert_eq!(tool.server_name, server_name);
     assert!(tool.supports_parallel_tool_calls);
     assert_eq!(tool.server_origin.as_deref(), Some("https://docs.example"));
+}
+
+#[tokio::test]
+async fn refresh_reuses_unchanged_clients_and_retires_only_changed_connections() {
+    let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
+    let permission_profile = Constrained::allow_any(PermissionProfile::default());
+    let mut manager = McpConnectionManager::new_uninitialized(
+        &approval_policy,
+        &permission_profile,
+        /*prefix_mcp_tool_names*/ true,
+    );
+    let runtime_context = McpRuntimeContext::new(
+        Arc::new(EnvironmentManager::without_environments()),
+        PathBuf::from("/tmp"),
+    );
+    manager.startup_context = Some(McpClientStartupContext {
+        store_mode: OAuthCredentialsStoreMode::default(),
+        runtime_context: runtime_context.clone(),
+        client_elicitation_capability: ElicitationCapability::default(),
+    });
+    manager.servers = HashMap::from([
+        (
+            "unchanged".to_string(),
+            configured_stdio_server("unchanged"),
+        ),
+        ("changed".to_string(), configured_stdio_server("before")),
+        ("removed".to_string(), configured_stdio_server("removed")),
+    ]);
+    for name in manager.servers.keys() {
+        manager
+            .clients
+            .insert(name.clone(), cancellable_pending_client());
+    }
+    let unchanged_startup = Arc::clone(&manager.clients["unchanged"].startup_complete);
+    let changed_startup = Arc::clone(&manager.clients["changed"].startup_complete);
+    let removed_startup = Arc::clone(&manager.clients["removed"].startup_complete);
+    let unchanged_cancel = manager.clients["unchanged"].cancel_token.clone();
+    let changed_cancel = manager.clients["changed"].cancel_token.clone();
+    let removed_cancel = manager.clients["removed"].cancel_token.clone();
+
+    let cleanup = manager
+        .refresh(McpConnectionRefresh {
+            servers: HashMap::from([
+                (
+                    "unchanged".to_string(),
+                    configured_stdio_server("unchanged"),
+                ),
+                ("changed".to_string(), configured_stdio_server("after")),
+                ("added".to_string(), configured_stdio_server("added")),
+            ]),
+            store_mode: OAuthCredentialsStoreMode::default(),
+            auth_entries: HashMap::new(),
+            submit_id: String::new(),
+            runtime_context,
+            codex_apps_tools_cache_key: CodexAppsToolsCacheKey {
+                account_id: None,
+                chatgpt_user_id: None,
+                is_workspace_account: false,
+            },
+            host_owned_codex_apps_enabled: false,
+            prefix_mcp_tool_names: true,
+            client_elicitation_capability: ElicitationCapability::default(),
+            tool_plugin_provenance: ToolPluginProvenance::default(),
+            auth: None,
+        })
+        .await;
+
+    assert_eq!(
+        (
+            manager.clients.keys().cloned().collect::<HashSet<_>>(),
+            Arc::ptr_eq(
+                &unchanged_startup,
+                &manager.clients["unchanged"].startup_complete
+            ),
+            Arc::ptr_eq(
+                &changed_startup,
+                &manager.clients["changed"].startup_complete
+            ),
+            unchanged_cancel.is_cancelled(),
+            changed_cancel.is_cancelled(),
+            manager.clients["changed"].cancel_token.is_cancelled(),
+            removed_cancel.is_cancelled(),
+        ),
+        (
+            HashSet::from([
+                "added".to_string(),
+                "changed".to_string(),
+                "unchanged".to_string(),
+            ]),
+            true,
+            false,
+            false,
+            true,
+            false,
+            true,
+        )
+    );
+
+    cleanup.await;
+    assert_eq!(
+        (
+            changed_startup.load(Ordering::Acquire),
+            removed_startup.load(Ordering::Acquire),
+        ),
+        (true, true)
+    );
+    manager.shutdown().await;
 }
 
 #[tokio::test]
@@ -1167,7 +1332,6 @@ async fn no_local_runtime_fails_local_stdio_but_keeps_local_http_server() {
         ),
     ]);
 
-    let cancel_token = CancellationToken::new();
     let manager = McpConnectionManager::new(
         &mcp_servers,
         OAuthCredentialsStoreMode::default(),
@@ -1175,7 +1339,6 @@ async fn no_local_runtime_fails_local_stdio_but_keeps_local_http_server() {
         &approval_policy,
         String::new(),
         tx_event,
-        cancel_token.clone(),
         PermissionProfile::default(),
         McpRuntimeContext::new(
             Arc::new(EnvironmentManager::without_environments()),
@@ -1217,7 +1380,6 @@ async fn no_local_runtime_fails_local_stdio_but_keeps_local_http_server() {
         startup_outcome_error_message(error),
         "local stdio MCP server `stdio` requires a local environment"
     );
-    cancel_token.cancel();
 }
 
 #[test]
