@@ -99,6 +99,13 @@ fn create_test_server_info(title: &str) -> McpServerInfo {
 }
 
 fn configured_stdio_server(command: &str) -> EffectiveMcpServer {
+    configured_stdio_server_in_environment(command, codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID)
+}
+
+fn configured_stdio_server_in_environment(
+    command: &str,
+    environment_id: &str,
+) -> EffectiveMcpServer {
     EffectiveMcpServer::configured(McpServerConfig {
         transport: McpServerTransportConfig::Stdio {
             command: command.to_string(),
@@ -107,7 +114,7 @@ fn configured_stdio_server(command: &str) -> EffectiveMcpServer {
             env_vars: Vec::new(),
             cwd: None,
         },
-        environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
+        environment_id: environment_id.to_string(),
         enabled: true,
         required: false,
         supports_parallel_tool_calls: false,
@@ -1174,15 +1181,12 @@ async fn refresh_reuses_unchanged_clients_and_retires_only_changed_connections()
         &permission_profile,
         /*prefix_mcp_tool_names*/ true,
     );
-    let runtime_context = McpRuntimeContext::new(
-        Arc::new(EnvironmentManager::without_environments()),
-        PathBuf::from("/tmp"),
-    );
-    manager.startup_context = Some(McpClientStartupContext {
-        store_mode: OAuthCredentialsStoreMode::default(),
-        runtime_context: runtime_context.clone(),
-        client_elicitation_capability: ElicitationCapability::default(),
-    });
+    let environment_manager = Arc::new(EnvironmentManager::without_environments());
+    environment_manager
+        .upsert_environment("remote".to_string(), "http://127.0.0.1:1".to_string())
+        .expect("add remote environment");
+    let runtime_context =
+        McpRuntimeContext::new(Arc::clone(&environment_manager), PathBuf::from("/tmp"));
     manager.servers = HashMap::from([
         (
             "unchanged".to_string(),
@@ -1190,7 +1194,17 @@ async fn refresh_reuses_unchanged_clients_and_retires_only_changed_connections()
         ),
         ("changed".to_string(), configured_stdio_server("before")),
         ("removed".to_string(), configured_stdio_server("removed")),
+        (
+            "environment".to_string(),
+            configured_stdio_server_in_environment("environment", "remote"),
+        ),
     ]);
+    manager.startup_context = Some(McpClientStartupContext::new(
+        OAuthCredentialsStoreMode::default(),
+        runtime_context.clone(),
+        ElicitationCapability::default(),
+        &manager.servers,
+    ));
     for name in manager.servers.keys() {
         manager
             .clients
@@ -1199,9 +1213,14 @@ async fn refresh_reuses_unchanged_clients_and_retires_only_changed_connections()
     let unchanged_startup = Arc::clone(&manager.clients["unchanged"].startup_complete);
     let changed_startup = Arc::clone(&manager.clients["changed"].startup_complete);
     let removed_startup = Arc::clone(&manager.clients["removed"].startup_complete);
+    let environment_startup = Arc::clone(&manager.clients["environment"].startup_complete);
     let unchanged_cancel = manager.clients["unchanged"].cancel_token.clone();
     let changed_cancel = manager.clients["changed"].cancel_token.clone();
     let removed_cancel = manager.clients["removed"].cancel_token.clone();
+    let environment_cancel = manager.clients["environment"].cancel_token.clone();
+    environment_manager
+        .upsert_environment("remote".to_string(), "http://127.0.0.1:2".to_string())
+        .expect("replace remote environment");
 
     let cleanup = manager
         .refresh(McpConnectionRefresh {
@@ -1212,11 +1231,15 @@ async fn refresh_reuses_unchanged_clients_and_retires_only_changed_connections()
                 ),
                 ("changed".to_string(), configured_stdio_server("after")),
                 ("added".to_string(), configured_stdio_server("added")),
+                (
+                    "environment".to_string(),
+                    configured_stdio_server_in_environment("environment", "remote"),
+                ),
             ]),
             store_mode: OAuthCredentialsStoreMode::default(),
             auth_entries: HashMap::new(),
             submit_id: String::new(),
-            runtime_context,
+            runtime_context: McpRuntimeContext::new(environment_manager, PathBuf::from("/tmp")),
             codex_apps_tools_cache_key: CodexAppsToolsCacheKey {
                 account_id: None,
                 chatgpt_user_id: None,
@@ -1241,22 +1264,30 @@ async fn refresh_reuses_unchanged_clients_and_retires_only_changed_connections()
                 &changed_startup,
                 &manager.clients["changed"].startup_complete
             ),
+            Arc::ptr_eq(
+                &environment_startup,
+                &manager.clients["environment"].startup_complete
+            ),
             unchanged_cancel.is_cancelled(),
             changed_cancel.is_cancelled(),
             manager.clients["changed"].cancel_token.is_cancelled(),
+            environment_cancel.is_cancelled(),
             removed_cancel.is_cancelled(),
         ),
         (
             HashSet::from([
                 "added".to_string(),
                 "changed".to_string(),
+                "environment".to_string(),
                 "unchanged".to_string(),
             ]),
             true,
             false,
             false,
+            false,
             true,
             false,
+            true,
             true,
         )
     );

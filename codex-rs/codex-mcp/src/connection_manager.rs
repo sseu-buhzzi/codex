@@ -44,6 +44,7 @@ use async_channel::Sender;
 use codex_config::Constrained;
 use codex_config::McpServerTransportConfig;
 use codex_config::types::OAuthCredentialsStoreMode;
+use codex_exec_server::Environment;
 use codex_login::CodexAuth;
 use codex_protocol::mcp::CallToolResult;
 use codex_protocol::mcp::McpServerInfo;
@@ -140,13 +141,51 @@ struct McpClientStartupContext {
     store_mode: OAuthCredentialsStoreMode,
     runtime_context: McpRuntimeContext,
     client_elicitation_capability: ElicitationCapability,
+    server_environments: HashMap<String, Option<Arc<Environment>>>,
 }
 
 impl McpClientStartupContext {
+    fn new(
+        store_mode: OAuthCredentialsStoreMode,
+        runtime_context: McpRuntimeContext,
+        client_elicitation_capability: ElicitationCapability,
+        servers: &HashMap<String, EffectiveMcpServer>,
+    ) -> Self {
+        let server_environments = servers
+            .iter()
+            .map(|(name, server)| {
+                let environment = server.configured_config().and_then(|config| {
+                    runtime_context
+                        .resolve_server_environment(name, config)
+                        .ok()
+                        .flatten()
+                });
+                (name.clone(), environment)
+            })
+            .collect();
+        Self {
+            store_mode,
+            runtime_context,
+            client_elicitation_capability,
+            server_environments,
+        }
+    }
+
     fn matches(&self, other: &Self) -> bool {
         self.store_mode == other.store_mode
             && self.runtime_context.matches(&other.runtime_context)
             && self.client_elicitation_capability == other.client_elicitation_capability
+    }
+
+    fn server_environment_matches(&self, server_name: &str, other: &Self) -> bool {
+        match (
+            self.server_environments.get(server_name),
+            other.server_environments.get(server_name),
+        ) {
+            (Some(Some(current)), Some(Some(updated))) => Arc::ptr_eq(current, updated),
+            (Some(None), Some(None)) => true,
+            (Some(_), Some(_)) | (None, Some(_)) | (Some(_), None) | (None, None) => false,
+        }
     }
 }
 
@@ -244,11 +283,12 @@ impl McpConnectionManager {
             .into_iter()
             .filter(|(_, server)| server.enabled())
             .collect::<HashMap<_, _>>();
-        let startup_context = McpClientStartupContext {
+        let startup_context = McpClientStartupContext::new(
             store_mode,
             runtime_context,
             client_elicitation_capability,
-        };
+            &servers,
+        );
         let restart_all = self
             .startup_context
             .as_ref()
@@ -263,6 +303,9 @@ impl McpConnectionManager {
                         .clients
                         .get(*name)
                         .is_some_and(AsyncManagedClient::startup_failed)
+                    || self.startup_context.as_ref().is_some_and(|current| {
+                        !current.server_environment_matches(name, &startup_context)
+                    })
                     || servers.get(*name) != self.servers.get(*name)
             })
             .cloned()
