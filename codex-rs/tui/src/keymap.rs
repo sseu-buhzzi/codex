@@ -183,6 +183,7 @@ pub(crate) struct VimNormalKeymap {
 pub(crate) struct VimOperatorKeymap {
     pub(crate) delete_line: Vec<KeyBinding>,
     pub(crate) yank_line: Vec<KeyBinding>,
+    pub(crate) change_line: Vec<KeyBinding>,
     pub(crate) motion_left: Vec<KeyBinding>,
     pub(crate) motion_right: Vec<KeyBinding>,
     pub(crate) motion_up: Vec<KeyBinding>,
@@ -657,6 +658,7 @@ impl RuntimeKeymap {
         let mut vim_operator = VimOperatorKeymap {
             delete_line: resolve_local!(keymap, defaults, vim_operator, delete_line),
             yank_line: resolve_local!(keymap, defaults, vim_operator, yank_line),
+            change_line: resolve_local!(keymap, defaults, vim_operator, change_line),
             motion_left: resolve_local!(keymap, defaults, vim_operator, motion_left),
             motion_right: resolve_local!(keymap, defaults, vim_operator, motion_right),
             motion_up: resolve_local!(keymap, defaults, vim_operator, motion_up),
@@ -699,6 +701,10 @@ impl RuntimeKeymap {
             (
                 keymap.vim_operator.yank_line.as_ref(),
                 vim_operator.yank_line.as_slice(),
+            ),
+            (
+                keymap.vim_operator.change_line.as_ref(),
+                vim_operator.change_line.as_slice(),
             ),
             (
                 keymap.vim_operator.motion_left.as_ref(),
@@ -1079,6 +1085,7 @@ impl RuntimeKeymap {
             vim_operator: VimOperatorKeymap {
                 delete_line: default_bindings![plain(KeyCode::Char('d'))],
                 yank_line: default_bindings![plain(KeyCode::Char('y'))],
+                change_line: default_bindings![plain(KeyCode::Char('c'))],
                 motion_left: default_bindings![plain(KeyCode::Char('h'))],
                 motion_right: default_bindings![plain(KeyCode::Char('l'))],
                 motion_up: default_bindings![plain(KeyCode::Char('k'))],
@@ -1545,6 +1552,7 @@ impl RuntimeKeymap {
             [
                 ("delete_line", self.vim_operator.delete_line.as_slice()),
                 ("yank_line", self.vim_operator.yank_line.as_slice()),
+                ("change_line", self.vim_operator.change_line.as_slice()),
                 ("motion_left", self.vim_operator.motion_left.as_slice()),
                 ("motion_right", self.vim_operator.motion_right.as_slice()),
                 ("motion_up", self.vim_operator.motion_up.as_slice()),

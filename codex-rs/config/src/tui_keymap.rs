@@ -263,6 +263,8 @@ pub struct TuiVimOperatorKeymap {
     pub delete_line: Option<KeybindingsSpec>,
     /// Repeat yank operator to yank the whole line (`yy`).
     pub yank_line: Option<KeybindingsSpec>,
+    /// Repeat change operator to change the whole line (`cc`).
+    pub change_line: Option<KeybindingsSpec>,
     /// Motion: left (`h`).
     pub motion_left: Option<KeybindingsSpec>,
     /// Motion: right (`l`).

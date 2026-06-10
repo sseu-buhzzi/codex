@@ -2911,6 +2911,7 @@
             },
             "vim_operator": {
               "cancel": null,
+              "change_line": null,
               "delete_line": null,
               "motion_down": null,
               "motion_left": null,
@@ -3611,6 +3612,7 @@
           ],
           "default": {
             "cancel": null,
+            "change_line": null,
             "delete_line": null,
             "motion_down": null,
             "motion_left": null,
@@ -4073,6 +4075,14 @@
             }
           ],
           "description": "Cancel the pending operator and return to normal mode."
+        },
+        "change_line": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Repeat change operator to change the whole line (`cc`)."
         },
         "delete_line": {
           "allOf": [
