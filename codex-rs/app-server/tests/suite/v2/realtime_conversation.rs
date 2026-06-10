@@ -36,7 +36,10 @@ use codex_app_server_protocol::ThreadRealtimeTranscriptDoneNotification;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnCompletedNotification;
+use codex_app_server_protocol::TurnStartParams;
+use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStartedNotification;
+use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_features::FEATURES;
 use codex_features::Feature;
 use codex_protocol::protocol::RealtimeConversationVersion;
@@ -1339,6 +1342,113 @@ async fn webrtc_v1_handoff_request_delegates_and_appends_result() -> Result<()> 
     );
 
     harness.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn webrtc_assistant_output_without_handoff_reaches_realtime() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let final_answer = "long output ".repeat(1_000);
+    for (version, expected_version, preamble) in [
+        (
+            RealtimeTestVersion::V1,
+            RealtimeConversationVersion::V1,
+            "direct preamble from v1",
+        ),
+        (
+            RealtimeTestVersion::V2,
+            RealtimeConversationVersion::V2,
+            "direct preamble from v2",
+        ),
+    ] {
+        let mut harness = RealtimeE2eHarness::new(
+            version,
+            main_loop_responses(vec![responses::sse(vec![
+                responses::ev_response_created("resp-1"),
+                json!({
+                    "type": "response.output_item.done",
+                    "item": {
+                        "type": "message",
+                        "role": "assistant",
+                        "id": "msg-preamble",
+                        "phase": "commentary",
+                        "content": [{"type": "output_text", "text": preamble}]
+                    }
+                }),
+                responses::ev_assistant_message("msg-final", &final_answer),
+                responses::ev_completed("resp-1"),
+            ])]),
+            realtime_sideband(vec![realtime_sideband_connection(vec![
+                vec![session_updated("sess_standalone_output")],
+                vec![],
+                vec![],
+            ])]),
+        )
+        .await?;
+
+        let started = harness.start_webrtc_realtime("v=offer\r\n").await?;
+        assert_eq!(started.started.version, expected_version);
+
+        let request_id = harness
+            .mcp
+            .send_turn_start_request(TurnStartParams {
+                thread_id: harness.thread_id.clone(),
+                input: vec![V2UserInput::Text {
+                    text: "direct text turn".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            })
+            .await?;
+        let response: JSONRPCResponse = timeout(
+            DEFAULT_TIMEOUT,
+            harness
+                .mcp
+                .read_stream_until_response_message(RequestId::Integer(request_id)),
+        )
+        .await??;
+        let _: TurnStartResponse = to_response(response)?;
+        let _ = harness
+            .read_notification::<TurnCompletedNotification>("turn/completed")
+            .await?;
+
+        let preamble_request = harness.sideband_outbound_request(/*request_index*/ 1).await;
+        let output_text = match version {
+            RealtimeTestVersion::V1 => {
+                let final_request = harness.sideband_outbound_request(/*request_index*/ 2).await;
+                assert_eq!(
+                    preamble_request,
+                    json!({
+                        "type": "conversation.handoff.append",
+                        "handoff_id": "codex",
+                        "output_text": preamble,
+                    })
+                );
+                assert_eq!(final_request["type"], "conversation.handoff.append");
+                assert_eq!(final_request["handoff_id"], "codex");
+                final_request["output_text"].as_str().expect("output text")
+            }
+            RealtimeTestVersion::V2 => {
+                assert_v2_function_call_output(&preamble_request, "codex", preamble);
+                assert_v2_response_create(
+                    &harness.sideband_outbound_request(/*request_index*/ 2).await,
+                );
+                let final_request = harness.sideband_outbound_request(/*request_index*/ 3).await;
+                assert_eq!(final_request["type"], "conversation.item.create");
+                assert_eq!(final_request["item"]["type"], "function_call_output");
+                assert_eq!(final_request["item"]["call_id"], "codex");
+                final_request["item"]["output"]
+                    .as_str()
+                    .expect("output text")
+            }
+        };
+        assert!(output_text.contains("tokens truncated"));
+        assert!(output_text.len() <= 4_000);
+
+        harness.shutdown().await;
+    }
+
     Ok(())
 }
 
