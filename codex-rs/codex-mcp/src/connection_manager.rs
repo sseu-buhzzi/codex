@@ -42,7 +42,6 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 use async_channel::Sender;
-use async_channel::TrySendError;
 use codex_config::Constrained;
 use codex_config::McpServerTransportConfig;
 use codex_config::types::OAuthCredentialsStoreMode;
@@ -390,7 +389,7 @@ impl McpConnectionManager {
             );
         }
         for (server_name, connection) in &self.clients {
-            let _ = emit_update(
+            emit_update(
                 submit_id.as_str(),
                 &tx_event,
                 McpStartupUpdateEvent {
@@ -424,7 +423,7 @@ impl McpConnectionManager {
                 };
 
                 if !startup_round.is_cancelled() {
-                    let _ = emit_update(
+                    emit_update(
                         startup_submit_id.as_str(),
                         &tx_event,
                         McpStartupUpdateEvent {
@@ -437,7 +436,6 @@ impl McpConnectionManager {
                 (server_name, outcome)
             });
         }
-        let startup_round = startup_round.clone();
         tokio::spawn(async move {
             let outcomes = join_set.join_all().await;
             let mut summary = McpStartupCompleteEvent::default();
@@ -1070,15 +1068,11 @@ impl Drop for McpConnectionManager {
     }
 }
 
-fn emit_update(
-    submit_id: &str,
-    tx_event: &Sender<Event>,
-    update: McpStartupUpdateEvent,
-) -> Result<(), TrySendError<Event>> {
-    tx_event.try_send(Event {
+fn emit_update(submit_id: &str, tx_event: &Sender<Event>, update: McpStartupUpdateEvent) {
+    let _ = tx_event.try_send(Event {
         id: submit_id.to_string(),
         msg: EventMsg::McpStartupUpdate(update),
-    })
+    });
 }
 
 fn mcp_init_error_display(

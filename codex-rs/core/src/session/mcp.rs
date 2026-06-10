@@ -342,7 +342,7 @@ impl Session {
             manager.refresh(McpConnectionRefresh {
                 servers: mcp_servers,
                 tx_event: self.get_tx_event(),
-                codex_home: config.codex_home.clone(),
+                codex_home: config.codex_home.to_path_buf(),
                 store_mode,
                 auth_entries: auth_statuses,
                 submit_id: turn_context.sub_id.clone(),
