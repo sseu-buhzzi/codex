@@ -339,21 +339,19 @@ impl Session {
         };
         let cleanup = {
             let mut manager = self.services.mcp_connection_manager.write().await;
-            manager
-                .refresh(McpConnectionRefresh {
-                    servers: mcp_servers,
-                    store_mode,
-                    auth_entries: auth_statuses,
-                    submit_id: turn_context.sub_id.clone(),
-                    runtime_context: mcp_runtime_context,
-                    codex_apps_tools_cache_key: codex_apps_tools_cache_key(auth.as_ref()),
-                    host_owned_codex_apps_enabled,
-                    prefix_mcp_tool_names: mcp_config.prefix_mcp_tool_names,
-                    client_elicitation_capability: mcp_config.client_elicitation_capability,
-                    tool_plugin_provenance,
-                    auth,
-                })
-                .await
+            manager.refresh(McpConnectionRefresh {
+                servers: mcp_servers,
+                store_mode,
+                auth_entries: auth_statuses,
+                submit_id: turn_context.sub_id.clone(),
+                runtime_context: mcp_runtime_context,
+                codex_apps_tools_cache_key: codex_apps_tools_cache_key(auth.as_ref()),
+                host_owned_codex_apps_enabled,
+                prefix_mcp_tool_names: mcp_config.prefix_mcp_tool_names,
+                client_elicitation_capability: mcp_config.client_elicitation_capability,
+                tool_plugin_provenance,
+                auth,
+            })
         };
         cleanup.await;
     }

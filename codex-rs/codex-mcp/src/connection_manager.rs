@@ -10,6 +10,8 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::PoisonError;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
@@ -41,6 +43,7 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 use async_channel::Sender;
+use async_channel::TrySendError;
 use codex_config::Constrained;
 use codex_config::McpServerTransportConfig;
 use codex_config::types::OAuthCredentialsStoreMode;
@@ -67,7 +70,6 @@ use rmcp::model::RequestId;
 use rmcp::model::Resource;
 use rmcp::model::ResourceTemplate;
 use serde_json::Value as JsonValue;
-use tokio::sync::RwLock;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
@@ -112,7 +114,7 @@ pub struct McpConnectionManager {
     server_metadata: HashMap<String, McpServerMetadata>,
     required_servers: Vec<String>,
     startup_context: Option<McpClientStartupContext>,
-    startup_generation: Arc<RwLock<u64>>,
+    startup_generation: Arc<Mutex<u64>>,
     tx_event: Sender<Event>,
     codex_home: PathBuf,
     tool_plugin_provenance: Arc<ToolPluginProvenance>,
@@ -220,7 +222,7 @@ impl McpConnectionManager {
             server_metadata: HashMap::new(),
             required_servers: Vec::new(),
             startup_context: None,
-            startup_generation: Arc::new(RwLock::new(0)),
+            startup_generation: Arc::new(Mutex::new(0)),
             tx_event,
             codex_home,
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
@@ -228,21 +230,19 @@ impl McpConnectionManager {
             prefix_mcp_tool_names,
             elicitation_requests,
         };
-        let cleanup = manager
-            .refresh(McpConnectionRefresh {
-                servers: mcp_servers.clone(),
-                store_mode,
-                auth_entries,
-                submit_id,
-                runtime_context,
-                codex_apps_tools_cache_key,
-                host_owned_codex_apps_enabled,
-                prefix_mcp_tool_names,
-                client_elicitation_capability,
-                tool_plugin_provenance,
-                auth: auth.cloned(),
-            })
-            .await;
+        let cleanup = manager.refresh(McpConnectionRefresh {
+            servers: mcp_servers.clone(),
+            store_mode,
+            auth_entries,
+            submit_id,
+            runtime_context,
+            codex_apps_tools_cache_key,
+            host_owned_codex_apps_enabled,
+            prefix_mcp_tool_names,
+            client_elicitation_capability,
+            tool_plugin_provenance,
+            auth: auth.cloned(),
+        });
         cleanup.await;
         manager
     }
@@ -251,7 +251,7 @@ impl McpConnectionManager {
     ///
     /// Unchanged clients remain connected. The returned future shuts down only clients that were
     /// removed or replaced and should be awaited after releasing any lock around the manager.
-    pub async fn refresh(
+    pub fn refresh(
         &mut self,
         refresh: McpConnectionRefresh,
     ) -> impl std::future::Future<Output = ()> + Send + 'static {
@@ -270,7 +270,10 @@ impl McpConnectionManager {
         } = refresh;
         // Serialize startup rounds so a superseded client cannot publish a terminal update after
         // the replacement round begins.
-        let mut startup_generation = self.startup_generation.write().await;
+        let mut startup_generation = self
+            .startup_generation
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         *startup_generation = (*startup_generation).wrapping_add(1);
         let generation = *startup_generation;
         let mut required_servers = servers
@@ -388,8 +391,7 @@ impl McpConnectionManager {
                     server: server_name.clone(),
                     status: McpStartupStatus::Starting,
                 },
-            )
-            .await;
+            );
             let server_name = server_name.clone();
             let async_managed_client = async_managed_client.clone();
             let cancel_token = async_managed_client.cancel_token.clone();
@@ -415,7 +417,9 @@ impl McpConnectionManager {
                     }
                 };
 
-                let current_generation = startup_generation.read().await;
+                let current_generation = startup_generation
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner);
                 if *current_generation == generation {
                     let _ = emit_update(
                         startup_submit_id.as_str(),
@@ -424,8 +428,7 @@ impl McpConnectionManager {
                             server: server_name.clone(),
                             status,
                         },
-                    )
-                    .await;
+                    );
                 }
 
                 (server_name, outcome)
@@ -448,14 +451,14 @@ impl McpConnectionManager {
                     }
                 }
             }
-            let current_generation = startup_generation_state.read().await;
+            let current_generation = startup_generation_state
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
             if *current_generation == generation {
-                let _ = tx_event
-                    .send(Event {
-                        id: submit_id,
-                        msg: EventMsg::McpStartupComplete(summary),
-                    })
-                    .await;
+                let _ = tx_event.try_send(Event {
+                    id: submit_id,
+                    msg: EventMsg::McpStartupComplete(summary),
+                });
             }
         });
         drop(startup_generation);
@@ -526,7 +529,7 @@ impl McpConnectionManager {
             server_metadata: HashMap::new(),
             required_servers: Vec::new(),
             startup_context: None,
-            startup_generation: Arc::new(RwLock::new(0)),
+            startup_generation: Arc::new(Mutex::new(0)),
             tx_event,
             codex_home: PathBuf::new(),
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
@@ -1077,17 +1080,15 @@ impl Drop for McpConnectionManager {
     }
 }
 
-async fn emit_update(
+fn emit_update(
     submit_id: &str,
     tx_event: &Sender<Event>,
     update: McpStartupUpdateEvent,
-) -> Result<(), async_channel::SendError<Event>> {
-    tx_event
-        .send(Event {
-            id: submit_id.to_string(),
-            msg: EventMsg::McpStartupUpdate(update),
-        })
-        .await
+) -> Result<(), TrySendError<Event>> {
+    tx_event.try_send(Event {
+        id: submit_id.to_string(),
+        msg: EventMsg::McpStartupUpdate(update),
+    })
 }
 
 fn mcp_init_error_display(

@@ -1229,40 +1229,38 @@ async fn refresh_reuses_unchanged_clients_and_retires_only_changed_connections()
         .upsert_environment("remote".to_string(), "http://127.0.0.1:2".to_string())
         .expect("replace remote environment");
 
-    let cleanup = manager
-        .refresh(McpConnectionRefresh {
-            servers: HashMap::from([
-                (
-                    "unchanged".to_string(),
-                    configured_stdio_server("unchanged"),
-                ),
-                (
-                    "cancelled".to_string(),
-                    configured_stdio_server("cancelled"),
-                ),
-                ("changed".to_string(), configured_stdio_server("after")),
-                ("added".to_string(), configured_stdio_server("added")),
-                (
-                    "environment".to_string(),
-                    configured_stdio_server_in_environment("environment", "remote"),
-                ),
-            ]),
-            store_mode: OAuthCredentialsStoreMode::default(),
-            auth_entries: HashMap::new(),
-            submit_id: String::new(),
-            runtime_context: McpRuntimeContext::new(environment_manager, PathBuf::from("/tmp")),
-            codex_apps_tools_cache_key: CodexAppsToolsCacheKey {
-                account_id: None,
-                chatgpt_user_id: None,
-                is_workspace_account: false,
-            },
-            host_owned_codex_apps_enabled: false,
-            prefix_mcp_tool_names: true,
-            client_elicitation_capability: ElicitationCapability::default(),
-            tool_plugin_provenance: ToolPluginProvenance::default(),
-            auth: None,
-        })
-        .await;
+    let cleanup = manager.refresh(McpConnectionRefresh {
+        servers: HashMap::from([
+            (
+                "unchanged".to_string(),
+                configured_stdio_server("unchanged"),
+            ),
+            (
+                "cancelled".to_string(),
+                configured_stdio_server("cancelled"),
+            ),
+            ("changed".to_string(), configured_stdio_server("after")),
+            ("added".to_string(), configured_stdio_server("added")),
+            (
+                "environment".to_string(),
+                configured_stdio_server_in_environment("environment", "remote"),
+            ),
+        ]),
+        store_mode: OAuthCredentialsStoreMode::default(),
+        auth_entries: HashMap::new(),
+        submit_id: String::new(),
+        runtime_context: McpRuntimeContext::new(environment_manager, PathBuf::from("/tmp")),
+        codex_apps_tools_cache_key: CodexAppsToolsCacheKey {
+            account_id: None,
+            chatgpt_user_id: None,
+            is_workspace_account: false,
+        },
+        host_owned_codex_apps_enabled: false,
+        prefix_mcp_tool_names: true,
+        client_elicitation_capability: ElicitationCapability::default(),
+        tool_plugin_provenance: ToolPluginProvenance::default(),
+        auth: None,
+    });
 
     assert_eq!(
         (
