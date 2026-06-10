@@ -299,10 +299,9 @@ impl McpConnectionManager {
             .filter(|name| {
                 restart_all
                     || name.as_str() == CODEX_APPS_MCP_SERVER_NAME
-                    || self
-                        .clients
-                        .get(*name)
-                        .is_some_and(AsyncManagedClient::startup_failed)
+                    || self.clients.get(*name).is_some_and(|client| {
+                        client.cancel_token.is_cancelled() || client.startup_failed()
+                    })
                     || self.startup_context.as_ref().is_some_and(|current| {
                         !current.server_environment_matches(name, &startup_context)
                     })

@@ -1192,6 +1192,10 @@ async fn refresh_reuses_unchanged_clients_and_retires_only_changed_connections()
             "unchanged".to_string(),
             configured_stdio_server("unchanged"),
         ),
+        (
+            "cancelled".to_string(),
+            configured_stdio_server("cancelled"),
+        ),
         ("changed".to_string(), configured_stdio_server("before")),
         ("removed".to_string(), configured_stdio_server("removed")),
         (
@@ -1211,13 +1215,16 @@ async fn refresh_reuses_unchanged_clients_and_retires_only_changed_connections()
             .insert(name.clone(), cancellable_pending_client());
     }
     let unchanged_startup = Arc::clone(&manager.clients["unchanged"].startup_complete);
+    let cancelled_startup = Arc::clone(&manager.clients["cancelled"].startup_complete);
     let changed_startup = Arc::clone(&manager.clients["changed"].startup_complete);
     let removed_startup = Arc::clone(&manager.clients["removed"].startup_complete);
     let environment_startup = Arc::clone(&manager.clients["environment"].startup_complete);
     let unchanged_cancel = manager.clients["unchanged"].cancel_token.clone();
+    let cancelled_cancel = manager.clients["cancelled"].cancel_token.clone();
     let changed_cancel = manager.clients["changed"].cancel_token.clone();
     let removed_cancel = manager.clients["removed"].cancel_token.clone();
     let environment_cancel = manager.clients["environment"].cancel_token.clone();
+    cancelled_cancel.cancel();
     environment_manager
         .upsert_environment("remote".to_string(), "http://127.0.0.1:2".to_string())
         .expect("replace remote environment");
@@ -1228,6 +1235,10 @@ async fn refresh_reuses_unchanged_clients_and_retires_only_changed_connections()
                 (
                     "unchanged".to_string(),
                     configured_stdio_server("unchanged"),
+                ),
+                (
+                    "cancelled".to_string(),
+                    configured_stdio_server("cancelled"),
                 ),
                 ("changed".to_string(), configured_stdio_server("after")),
                 ("added".to_string(), configured_stdio_server("added")),
@@ -1261,6 +1272,10 @@ async fn refresh_reuses_unchanged_clients_and_retires_only_changed_connections()
                 &manager.clients["unchanged"].startup_complete
             ),
             Arc::ptr_eq(
+                &cancelled_startup,
+                &manager.clients["cancelled"].startup_complete
+            ),
+            Arc::ptr_eq(
                 &changed_startup,
                 &manager.clients["changed"].startup_complete
             ),
@@ -1269,6 +1284,7 @@ async fn refresh_reuses_unchanged_clients_and_retires_only_changed_connections()
                 &manager.clients["environment"].startup_complete
             ),
             unchanged_cancel.is_cancelled(),
+            manager.clients["cancelled"].cancel_token.is_cancelled(),
             changed_cancel.is_cancelled(),
             manager.clients["changed"].cancel_token.is_cancelled(),
             environment_cancel.is_cancelled(),
@@ -1277,11 +1293,14 @@ async fn refresh_reuses_unchanged_clients_and_retires_only_changed_connections()
         (
             HashSet::from([
                 "added".to_string(),
+                "cancelled".to_string(),
                 "changed".to_string(),
                 "environment".to_string(),
                 "unchanged".to_string(),
             ]),
             true,
+            false,
+            false,
             false,
             false,
             false,
@@ -1295,10 +1314,11 @@ async fn refresh_reuses_unchanged_clients_and_retires_only_changed_connections()
     cleanup.await;
     assert_eq!(
         (
+            cancelled_startup.load(Ordering::Acquire),
             changed_startup.load(Ordering::Acquire),
             removed_startup.load(Ordering::Acquire),
         ),
-        (true, true)
+        (true, true, true)
     );
     manager.shutdown().await;
 }
