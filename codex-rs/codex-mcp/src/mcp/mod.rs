@@ -293,7 +293,7 @@ pub async fn read_mcp_resource(
     .await;
     let (tx_event, rx_event) = unbounded();
     drop(rx_event);
-    let manager = McpConnectionManager::new(
+    let mut manager = McpConnectionManager::new(
         &mcp_servers,
         config.mcp_oauth_credentials_store_mode,
         auth_statuses,
@@ -316,7 +316,7 @@ pub async fn read_mcp_resource(
     let result = manager
         .read_resource(server, ReadResourceRequestParams::new(uri))
         .await;
-    cancel_token.cancel();
+    manager.shutdown().await;
     result
 }
 
@@ -363,7 +363,7 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
     let (tx_event, rx_event) = unbounded();
     drop(rx_event);
 
-    let mcp_connection_manager = McpConnectionManager::new(
+    let mut mcp_connection_manager = McpConnectionManager::new(
         &mcp_servers,
         config.mcp_oauth_credentials_store_mode,
         auth_status_entries.clone(),
@@ -391,7 +391,7 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
     )
     .await;
 
-    cancel_token.cancel();
+    mcp_connection_manager.shutdown().await;
 
     snapshot
 }
