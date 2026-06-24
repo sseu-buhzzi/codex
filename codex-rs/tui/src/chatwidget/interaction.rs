@@ -116,7 +116,7 @@ impl ChatWidget {
             && !self.input_queue.pending_steers.is_empty()
             && self.bottom_pane.is_task_running()
             && self.bottom_pane.no_modal_or_popup_active()
-            && !self.should_handle_vim_insert_escape(key_event)
+            && !self.should_handle_vim_escape_in_editing_mode(key_event)
         {
             self.input_queue.submit_pending_steers_after_interrupt = true;
             if !self.submit_op(AppCommand::interrupt()) {

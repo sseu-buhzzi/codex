@@ -260,14 +260,18 @@ impl App {
         !self.chat_widget.side_conversation_active()
             && self.chat_widget.is_normal_backtrack_mode()
             && self.chat_widget.composer_is_empty()
-            && !self.chat_widget.should_handle_vim_insert_escape(key_event)
+            && !self
+                .chat_widget
+                .should_handle_vim_escape_in_editing_mode(key_event)
     }
 
     pub(super) fn should_reject_side_backtrack_esc(&self, key_event: KeyEvent) -> bool {
         self.chat_widget.side_conversation_active()
             && self.chat_widget.is_normal_backtrack_mode()
             && self.chat_widget.composer_is_empty()
-            && !self.chat_widget.should_handle_vim_insert_escape(key_event)
+            && !self
+                .chat_widget
+                .should_handle_vim_escape_in_editing_mode(key_event)
     }
 
     pub(super) fn reject_side_backtrack_esc(&mut self) {

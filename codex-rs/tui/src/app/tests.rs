@@ -5795,13 +5795,19 @@ async fn backtrack_esc_does_not_steal_empty_vim_insert_escape() {
             crossterm::event::KeyCode::Char('i'),
             KeyModifiers::NONE,
         ));
-    assert!(app.chat_widget.should_handle_vim_insert_escape(esc));
+    assert!(
+        app.chat_widget
+            .should_handle_vim_escape_in_editing_mode(esc)
+    );
     assert!(!app.should_handle_backtrack_esc(esc));
 
     app.chat_widget.handle_key_event(esc);
 
     assert!(!app.backtrack.primed);
-    assert!(!app.chat_widget.should_handle_vim_insert_escape(esc));
+    assert!(
+        !app.chat_widget
+            .should_handle_vim_escape_in_editing_mode(esc)
+    );
     assert!(app.should_handle_backtrack_esc(esc));
 }
 
@@ -5823,7 +5829,10 @@ async fn side_conversations_reject_backtrack_esc_without_stealing_vim_insert_esc
             KeyModifiers::NONE,
         ));
 
-    assert!(app.chat_widget.should_handle_vim_insert_escape(esc));
+    assert!(
+        app.chat_widget
+            .should_handle_vim_escape_in_editing_mode(esc)
+    );
     assert!(!app.should_handle_backtrack_esc(esc));
     assert!(!app.should_reject_side_backtrack_esc(esc));
 }

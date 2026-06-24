@@ -635,7 +635,7 @@ impl BottomPane {
                 && self.is_task_running
                 && !(is_agent_command && key_event.code == KeyCode::Esc)
                 && !self.composer.popup_active()
-                && !self.composer_should_handle_vim_insert_escape(key_event)
+                && !self.composer_should_handle_vim_escape_in_editing_mode(key_event)
                 && let Some(status) = &self.status
             {
                 // Send Op::Interrupt
@@ -1234,8 +1234,12 @@ impl BottomPane {
         self.composer.is_vim_enabled()
     }
 
-    pub(crate) fn composer_should_handle_vim_insert_escape(&self, key_event: KeyEvent) -> bool {
-        self.composer.should_handle_vim_insert_escape(key_event)
+    pub(crate) fn composer_should_handle_vim_escape_in_editing_mode(
+        &self,
+        key_event: KeyEvent,
+    ) -> bool {
+        self.composer
+            .should_handle_vim_escape_in_editing_mode(key_event)
     }
 
     pub(crate) fn is_task_running(&self) -> bool {

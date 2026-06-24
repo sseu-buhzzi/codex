@@ -1065,13 +1065,14 @@ impl ChatComposer {
 
     /// Return whether Escape should be routed to the textarea before popups.
     ///
-    /// Vim insert mode owns Escape as a transition back to normal mode. The app
-    /// event layer asks this before running generic Escape behavior so the same
-    /// key does not both leave insert mode and dismiss unrelated UI.
-    pub(crate) fn should_handle_vim_insert_escape(&self, key_event: KeyEvent) -> bool {
+    /// Vim insert and replace modes own Escape as a transition back to normal
+    /// mode. The app event layer asks this before running generic Escape
+    /// behavior so the same key does not both leave an editing mode and dismiss
+    /// unrelated UI.
+    pub(crate) fn should_handle_vim_escape_in_editing_mode(&self, key_event: KeyEvent) -> bool {
         self.draft
             .textarea
-            .should_handle_vim_insert_escape(key_event)
+            .should_handle_vim_escape_in_editing_mode(key_event)
     }
 
     fn vim_mode_indicator_span(&self) -> Option<Span<'static>> {
@@ -3033,7 +3034,7 @@ impl ChatComposer {
                 return (InputResult::None, true);
             }
         }
-        if self.should_handle_vim_insert_escape(key_event) {
+        if self.should_handle_vim_escape_in_editing_mode(key_event) {
             return self.handle_input_basic(key_event);
         }
         if self.draft.textarea.is_vim_normal_mode() && self.draft.textarea.is_vim_operator_pending()

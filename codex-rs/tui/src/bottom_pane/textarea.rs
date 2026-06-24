@@ -322,12 +322,13 @@ impl TextArea {
 
     /// Return whether Escape should be intercepted before composer-level routing.
     ///
-    /// In Vim insert mode, Escape is an editing transition rather than a popup
-    /// cancel/backtrack shortcut. Letting the composer handle it first would
-    /// close UI surfaces while leaving the textarea in insert mode.
-    pub(crate) fn should_handle_vim_insert_escape(&self, event: KeyEvent) -> bool {
+    /// In Vim insert or replace mode, Escape is an editing transition back to
+    /// normal mode rather than a popup cancel/backtrack shortcut. Letting the
+    /// composer handle it first would close UI surfaces while leaving the
+    /// textarea in an editing mode.
+    pub(crate) fn should_handle_vim_escape_in_editing_mode(&self, event: KeyEvent) -> bool {
         self.vim_enabled
-            && self.vim_mode == VimMode::Insert
+            && matches!(self.vim_mode, VimMode::Insert | VimMode::Replace)
             && event.code == KeyCode::Esc
             && event.modifiers == KeyModifiers::NONE
             && matches!(event.kind, KeyEventKind::Press | KeyEventKind::Repeat)

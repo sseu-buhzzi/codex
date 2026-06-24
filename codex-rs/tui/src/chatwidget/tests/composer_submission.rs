@@ -1003,10 +1003,10 @@ async fn pending_steer_esc_does_not_steal_vim_insert_escape() {
     chat.toggle_vim_mode_and_notify();
     chat.handle_key_event(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
 
-    assert!(chat.should_handle_vim_insert_escape(esc));
+    assert!(chat.should_handle_vim_escape_in_editing_mode(esc));
     chat.handle_key_event(esc);
 
-    assert!(!chat.should_handle_vim_insert_escape(esc));
+    assert!(!chat.should_handle_vim_escape_in_editing_mode(esc));
     assert_eq!(chat.input_queue.pending_steers.len(), 1);
     assert!(!chat.input_queue.submit_pending_steers_after_interrupt);
     assert!(op_rx.try_recv().is_err());
