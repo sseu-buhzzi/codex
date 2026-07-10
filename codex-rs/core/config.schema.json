@@ -2891,6 +2891,9 @@
               "enter_insert": null,
               "enter_replace": null,
               "insert_line_start": null,
+              "move_big_word_backward": null,
+              "move_big_word_end": null,
+              "move_big_word_forward": null,
               "move_down": null,
               "move_left": null,
               "move_line_end": null,
@@ -2914,6 +2917,9 @@
               "cancel": null,
               "change_line": null,
               "delete_line": null,
+              "motion_big_word_backward": null,
+              "motion_big_word_end": null,
+              "motion_big_word_forward": null,
               "motion_down": null,
               "motion_left": null,
               "motion_line_end": null,
@@ -3586,6 +3592,9 @@
             "enter_insert": null,
             "enter_replace": null,
             "insert_line_start": null,
+            "move_big_word_backward": null,
+            "move_big_word_end": null,
+            "move_big_word_forward": null,
             "move_down": null,
             "move_left": null,
             "move_line_end": null,
@@ -3616,6 +3625,9 @@
             "cancel": null,
             "change_line": null,
             "delete_line": null,
+            "motion_big_word_backward": null,
+            "motion_big_word_end": null,
+            "motion_big_word_forward": null,
             "motion_down": null,
             "motion_left": null,
             "motion_line_end": null,
@@ -3927,6 +3939,30 @@
           ],
           "description": "Enter insert mode at first non-blank of line (`I`)."
         },
+        "move_big_word_backward": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Move cursor to start of previous big word (`B`)."
+        },
+        "move_big_word_end": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Move cursor to end of current/next big word (`E`)."
+        },
+        "move_big_word_forward": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Move cursor to start of next big word (`W`)."
+        },
         "move_down": {
           "allOf": [
             {
@@ -4101,6 +4137,30 @@
             }
           ],
           "description": "Repeat delete operator to delete the whole line (`dd`)."
+        },
+        "motion_big_word_backward": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Motion: to start of previous big word (`B`)."
+        },
+        "motion_big_word_end": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Motion: to end of current/next big word (`E`)."
+        },
+        "motion_big_word_forward": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Motion: to start of next big word (`W`)."
         },
         "motion_down": {
           "allOf": [

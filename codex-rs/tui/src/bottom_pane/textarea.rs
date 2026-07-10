@@ -750,6 +750,26 @@ impl TextArea {
             self.set_cursor(self.vim_word_end_cursor());
             return;
         }
+        if self
+            .vim_normal_keymap
+            .move_big_word_forward
+            .is_pressed(event)
+        {
+            self.set_cursor(self.beginning_of_next_big_word());
+            return;
+        }
+        if self
+            .vim_normal_keymap
+            .move_big_word_backward
+            .is_pressed(event)
+        {
+            self.set_cursor(self.beginning_of_previous_big_word());
+            return;
+        }
+        if self.vim_normal_keymap.move_big_word_end.is_pressed(event) {
+            self.set_cursor(self.vim_big_word_end_cursor());
+            return;
+        }
         if self.vim_normal_keymap.move_line_start.is_pressed(event) {
             self.set_cursor(self.beginning_of_current_line());
             return;
@@ -920,6 +940,27 @@ impl TextArea {
         if self.vim_operator_keymap.motion_word_end.is_pressed(event) {
             return Some(VimMotion::WordEnd);
         }
+        if self
+            .vim_operator_keymap
+            .motion_big_word_forward
+            .is_pressed(event)
+        {
+            return Some(VimMotion::BigWordForward);
+        }
+        if self
+            .vim_operator_keymap
+            .motion_big_word_backward
+            .is_pressed(event)
+        {
+            return Some(VimMotion::BigWordBackward);
+        }
+        if self
+            .vim_operator_keymap
+            .motion_big_word_end
+            .is_pressed(event)
+        {
+            return Some(VimMotion::BigWordEnd);
+        }
         if self.vim_operator_keymap.motion_line_start.is_pressed(event) {
             return Some(VimMotion::LineStart);
         }
@@ -1000,6 +1041,9 @@ impl TextArea {
             | VimMotion::WordForward
             | VimMotion::WordBackward
             | VimMotion::WordEnd
+            | VimMotion::BigWordForward
+            | VimMotion::BigWordBackward
+            | VimMotion::BigWordEnd
             | VimMotion::LineStart
             | VimMotion::LineEnd => return None,
         };
@@ -1017,6 +1061,9 @@ impl TextArea {
             VimMotion::WordForward => self.set_cursor(self.beginning_of_next_word()),
             VimMotion::WordBackward => self.set_cursor(self.beginning_of_previous_word()),
             VimMotion::WordEnd => self.set_cursor(self.vim_word_end_exclusive()),
+            VimMotion::BigWordForward => self.set_cursor(self.beginning_of_next_big_word()),
+            VimMotion::BigWordBackward => self.set_cursor(self.beginning_of_previous_big_word()),
+            VimMotion::BigWordEnd => self.set_cursor(self.vim_big_word_end_exclusive()),
             VimMotion::LineStart => self.set_cursor(self.beginning_of_current_line()),
             VimMotion::LineEnd => self.set_cursor(self.end_of_current_line()),
         }
@@ -1978,6 +2025,69 @@ impl TextArea {
             return self.text.len();
         };
         self.adjust_pos_out_of_elements(end + next_non_ws, /*prefer_start*/ true)
+    }
+
+    pub(crate) fn beginning_of_next_big_word(&self) -> usize {
+        self.beginning_of_next_big_word_from(self.cursor_pos)
+    }
+
+    fn beginning_of_next_big_word_from(&self, cursor_pos: usize) -> usize {
+        let Some(first_ws) = self.text[cursor_pos..].find(|ch: char| ch.is_whitespace()) else {
+            return self.text.len();
+        };
+        let end = cursor_pos + first_ws;
+        let Some(first_non_ws) = self.text[end..].find(|ch: char| !ch.is_whitespace()) else {
+            return self.text.len();
+        };
+        let next_start = end + first_non_ws;
+        self.adjust_pos_out_of_elements(next_start, /*prefer_start*/ true)
+    }
+
+    pub(crate) fn beginning_of_previous_big_word(&self) -> usize {
+        self.beginning_of_previous_big_word_from(self.cursor_pos)
+    }
+
+    fn beginning_of_previous_big_word_from(&self, cursor_pos: usize) -> usize {
+        let Some(prev_end) = self.text[..cursor_pos].rfind(|ch: char| !ch.is_whitespace()) else {
+            return 0;
+        };
+        let Some((prev_start_pre, ws)) = self.text[..prev_end]
+            .char_indices()
+            .rfind(|&(_, ch)| ch.is_whitespace())
+        else {
+            return 0;
+        };
+        let prev_start = prev_start_pre + ws.len_utf8();
+        self.adjust_pos_out_of_elements(prev_start, /*prefer_start*/ true)
+    }
+
+    pub(crate) fn end_of_next_big_word(&self) -> usize {
+        self.end_of_next_big_word_from(self.cursor_pos)
+    }
+
+    fn end_of_next_big_word_from(&self, cursor_pos: usize) -> usize {
+        let Some((first_non_ws, _)) = self.text[cursor_pos..].char_indices().skip(1).find(|&(_, ch)| !ch.is_whitespace())
+        else {
+            return self.text.len();
+        };
+        let next_start = cursor_pos + first_non_ws;
+        let Some(first_ws) = self.text[next_start..].find(|ch: char| ch.is_whitespace()) else {
+            return self.text.len();
+        };
+        let end = next_start + first_ws;
+        return self.adjust_pos_out_of_elements(end, /*prefer_start*/ false);
+    }
+
+    fn vim_big_word_end_exclusive(&self) -> usize {
+        self.end_of_next_big_word()
+    }
+
+    fn vim_big_word_end_cursor(&self) -> usize {
+        let end = self.end_of_next_big_word();
+        let Some((end_pre, _)) = self.text[..end].char_indices().next_back() else {
+            return end;
+        };
+        return end_pre;
     }
 
     fn adjust_pos_out_of_elements(&self, pos: usize, prefer_start: bool) -> usize {
@@ -2942,6 +3052,118 @@ mod tests {
         }
 
         insta::assert_snapshot!("vim_e_advances_from_each_word_end", states.join("\n\n"));
+    }
+
+    #[test]
+    fn vim_w_skips_to_next_word_boundary() {
+        let mut t = ta_with("hello, world");
+        t.set_cursor(/*pos*/ 0);
+        t.set_vim_enabled(/*enabled*/ true);
+
+        t.input(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE));
+        assert_eq!(t.cursor(), 6); // past 'hello,' into 'world'
+
+        t.input(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE));
+        assert_eq!(t.cursor(), 11); // end of string
+    }
+
+    #[test]
+    fn vim_b_moves_to_previous_word_start() {
+        let mut t = ta_with("hello, world");
+        t.set_cursor(/*pos*/ 8); // on 'o' of 'world'
+        t.set_vim_enabled(/*enabled*/ true);
+
+        t.input(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE));
+        assert_eq!(t.cursor(), 6); // start of 'world'
+
+        t.input(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE));
+        assert_eq!(t.cursor(), 0); // start of 'hello'
+    }
+
+    #[test]
+    fn vim_big_w_skips_whitespace_and_punctuation_to_next_big_word() {
+        let mut t = ta_with("hello, world");
+        t.set_cursor(/*pos*/ 0);
+        t.set_vim_enabled(/*enabled*/ true);
+
+        t.input(KeyEvent::new(KeyCode::Char('W'), KeyModifiers::NONE));
+        assert_eq!(t.cursor(), 7); // start of 'world' (skips 'hello, ')
+    }
+
+    #[test]
+    fn vim_big_b_moves_to_previous_big_word_start() {
+        let mut t = ta_with("hello, world");
+        t.set_cursor(/*pos*/ 8); // on 'o' of 'world'
+        t.set_vim_enabled(/*enabled*/ true);
+
+        t.input(KeyEvent::new(KeyCode::Char('B'), KeyModifiers::NONE));
+        assert_eq!(t.cursor(), 7); // start of 'world'
+
+        t.input(KeyEvent::new(KeyCode::Char('B'), KeyModifiers::NONE));
+        assert_eq!(t.cursor(), 0); // start of 'hello,'
+    }
+
+    #[test]
+    fn vim_big_e_moves_to_end_of_big_word() {
+        let mut t = ta_with("hello, world");
+        t.set_cursor(/*pos*/ 0);
+        t.set_vim_enabled(/*enabled*/ true);
+
+        t.input(KeyEvent::new(KeyCode::Char('E'), KeyModifiers::NONE));
+        assert_eq!(t.cursor(), 5); // end of 'hello,' (on comma)
+
+        t.input(KeyEvent::new(KeyCode::Char('E'), KeyModifiers::NONE));
+        assert_eq!(t.cursor(), 11); // end of 'world'
+    }
+
+    #[test]
+    fn vim_dw_deletes_to_next_word_boundary() {
+        let mut t = ta_with("hello, world");
+        t.set_cursor(/*pos*/ 0);
+        t.set_vim_enabled(/*enabled*/ true);
+
+        t.input(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE));
+
+        assert_eq!(t.text(), "world");
+        assert_eq!(t.kill_buffer, "hello, ");
+    }
+
+    #[test]
+    fn vim_d_big_w_deletes_to_next_WORD_boundary() {
+        let mut t = ta_with("hello, world");
+        t.set_cursor(/*pos*/ 0);
+        t.set_vim_enabled(/*enabled*/ true);
+
+        t.input(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('W'), KeyModifiers::NONE));
+
+        assert_eq!(t.text(), "world");
+        assert_eq!(t.kill_buffer, "hello, ");
+    }
+
+    #[test]
+    fn vim_cw_changes_to_next_word_boundary() {
+        let mut t = ta_with("hello, world");
+        t.set_cursor(/*pos*/ 0);
+        t.set_vim_enabled(/*enabled*/ true);
+
+        t.input(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE));
+
+        assert_eq!(t.text(), "world");
+        assert_eq!(t.vim_mode_label(), Some("Insert"));
+        assert_eq!(t.cursor(), 0);
+    }
+
+    #[test]
+    fn vim_big_w_at_end_of_buffer_is_noop() {
+        let mut t = ta_with("hello");
+        t.set_cursor(/*pos*/ 5);
+        t.set_vim_enabled(/*enabled*/ true);
+
+        t.input(KeyEvent::new(KeyCode::Char('W'), KeyModifiers::NONE));
+        assert_eq!(t.cursor(), 5);
     }
 
     #[test]

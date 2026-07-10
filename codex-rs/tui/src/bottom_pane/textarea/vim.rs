@@ -41,6 +41,9 @@ pub(super) enum VimMotion {
     WordForward,
     WordBackward,
     WordEnd,
+    BigWordForward,
+    BigWordBackward,
+    BigWordEnd,
     LineStart,
     LineEnd,
 }
