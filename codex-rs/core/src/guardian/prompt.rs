@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use codex_protocol::models::ResponseItem;
+use codex_protocol::models::plaintext_agent_message_content;
 use codex_protocol::protocol::GuardianRiskLevel;
 use codex_protocol::protocol::GuardianUserAuthorization;
 use codex_protocol::user_input::UserInput;
@@ -452,6 +453,12 @@ pub(crate) fn collect_guardian_transcript_entries(
             ResponseItem::Message { role, content, .. } if role == "assistant" => {
                 content_entry(GuardianTranscriptEntryKind::Assistant, content)
             }
+            ResponseItem::AgentMessage {
+                author, content, ..
+            } => plaintext_agent_message_content(content).map(|text| GuardianTranscriptEntry {
+                kind: GuardianTranscriptEntryKind::Assistant,
+                text: format!("Agent message from {author}:\n{text}"),
+            }),
             ResponseItem::LocalShellCall { action, .. } => serialized_entry(
                 GuardianTranscriptEntryKind::Tool("tool shell call".to_string()),
                 serde_json::to_string(action).ok(),
@@ -665,7 +672,7 @@ pub(crate) fn guardian_output_schema() -> Value {
 fn guardian_output_contract_prompt() -> &'static str {
     r#"You may use read-only tool checks to gather any additional context you need before deciding. When you are ready to answer, your final message must be strict JSON.
 
-For low-risk actions, give the final answer directly: {"outcome":"allow"}.
+When the final decision is both low-risk and allow, give the final answer directly: {"outcome":"allow"}.
 
 For anything else, use this JSON schema:
 {
