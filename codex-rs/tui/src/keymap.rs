@@ -150,6 +150,7 @@ pub(crate) struct VimNormalKeymap {
     pub(crate) insert_line_start: Vec<KeyBinding>,
     pub(crate) open_line_below: Vec<KeyBinding>,
     pub(crate) open_line_above: Vec<KeyBinding>,
+    pub(crate) join_line: Vec<KeyBinding>,
     pub(crate) move_left: Vec<KeyBinding>,
     pub(crate) move_right: Vec<KeyBinding>,
     pub(crate) move_up: Vec<KeyBinding>,
@@ -497,6 +498,7 @@ impl RuntimeKeymap {
             insert_line_start: resolve_local!(keymap, defaults, vim_normal, insert_line_start),
             open_line_below: resolve_local!(keymap, defaults, vim_normal, open_line_below),
             open_line_above: resolve_local!(keymap, defaults, vim_normal, open_line_above),
+            join_line: resolve_local!(keymap, defaults, vim_normal, join_line),
             move_left: resolve_local!(keymap, defaults, vim_normal, move_left),
             move_right: resolve_local!(keymap, defaults, vim_normal, move_right),
             move_up: resolve_local!(keymap, defaults, vim_normal, move_up),
@@ -573,6 +575,10 @@ impl RuntimeKeymap {
             (
                 keymap.vim_normal.open_line_above.as_ref(),
                 vim_normal.open_line_above.as_slice(),
+            ),
+            (
+                keymap.vim_normal.join_line.as_ref(),
+                vim_normal.join_line.as_slice(),
             ),
             (
                 keymap.vim_normal.move_left.as_ref(),
@@ -1125,6 +1131,7 @@ impl RuntimeKeymap {
                     shift(KeyCode::Char('o')),
                     plain(KeyCode::Char('O'))
                 ],
+                join_line: default_bindings![shift(KeyCode::Char('j')), plain(KeyCode::Char('J'))],
                 move_left: default_bindings![plain(KeyCode::Char('h')), plain(KeyCode::Left)],
                 move_right: default_bindings![plain(KeyCode::Char('l')), plain(KeyCode::Right)],
                 move_up: default_bindings![plain(KeyCode::Char('k')), plain(KeyCode::Up)],
@@ -1598,6 +1605,7 @@ impl RuntimeKeymap {
                     "open_line_above",
                     self.vim_normal.open_line_above.as_slice(),
                 ),
+                ("join_line", self.vim_normal.join_line.as_slice()),
                 ("move_left", self.vim_normal.move_left.as_slice()),
                 ("move_right", self.vim_normal.move_right.as_slice()),
                 ("move_up", self.vim_normal.move_up.as_slice()),

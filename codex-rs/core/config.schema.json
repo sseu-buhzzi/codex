@@ -3137,6 +3137,7 @@
               "enter_insert": null,
               "enter_replace": null,
               "insert_line_start": null,
+              "join_line": null,
               "move_big_word_backward": null,
               "move_big_word_end": null,
               "move_big_word_forward": null,
@@ -3838,6 +3839,7 @@
             "enter_insert": null,
             "enter_replace": null,
             "insert_line_start": null,
+            "join_line": null,
             "move_big_word_backward": null,
             "move_big_word_end": null,
             "move_big_word_forward": null,
@@ -4184,6 +4186,14 @@
             }
           ],
           "description": "Enter insert mode at first non-blank of line (`I`)."
+        },
+        "join_line": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Join the current line with the next line (`J`)."
         },
         "move_big_word_backward": {
           "allOf": [

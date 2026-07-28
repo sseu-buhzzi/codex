@@ -720,6 +720,10 @@ impl TextArea {
             self.vim_mode = VimMode::Insert;
             return;
         }
+        if self.vim_normal_keymap.join_line.is_pressed(event) {
+            self.vim_join_line();
+            return;
+        }
         if self.vim_normal_keymap.move_left.is_pressed(event) {
             self.move_cursor_left();
             return;
@@ -1341,6 +1345,51 @@ impl TextArea {
         let eol = self.end_of_current_line();
         let end = if eol < self.text.len() { eol + 1 } else { eol };
         bol..end
+    }
+
+    /// Join the current line with the line below (`J`), mirroring Vim\'s `J`.
+    ///
+    /// Trailing whitespace on the current line and leading whitespace on the
+    /// next line are removed, then a single space separates the two unless:
+    /// the current line is empty, the next line is empty, or the next line
+    /// (after indent removal) starts with `)`. The cursor moves to the join
+    /// point (on the inserted space when one is added). Stays in normal mode.
+    fn vim_join_line(&mut self) {
+        let bol = self.beginning_of_current_line();
+        let eol = self.end_of_current_line();
+        // No next line to join.
+        if eol >= self.text.len() {
+            return;
+        }
+        let next_bol = eol + 1;
+        let next_eol = self.end_of_line(next_bol);
+
+        // The last non-whitespace char in current line.
+        let content_end = self.text[..eol]
+            .char_indices()
+            .rev()
+            .take(next_eol - next_bol)
+            .take_while(|(_, ch)| ch.is_whitespace())
+            .last()
+            .map_or(eol, |(idx, _)| idx);
+        let curr_is_blank = content_end <= bol;
+        // The first non-whitespace char in next line.
+        let next_content_start = self.text[next_bol..next_eol]
+            .char_indices()
+            .find_map(|(offset, ch)| (!ch.is_whitespace()).then_some(next_bol + offset))
+            .unwrap_or(next_eol);
+        let next_is_blank = next_content_start >= next_eol;
+        let next_starts_with_rpar =
+            self.text[next_content_start..next_eol].chars().next() == Some(')');
+
+        let separator = if curr_is_blank || next_is_blank || next_starts_with_rpar {
+            ""
+        } else {
+            " "
+        };
+        // Cursor lands on the join point.
+        self.replace_range(content_end..next_content_start, separator);
+        self.set_cursor(content_end);
     }
 
     /// Move the cursor left by a single grapheme cluster.
@@ -2727,6 +2776,252 @@ mod tests {
     }
 
     #[test]
+    fn vim_j_joins_two_lines_with_a_space() {
+        let mut t = ta_with("hello\nworld");
+        t.set_cursor(/*pos*/ 2);
+        t.set_vim_enabled(/*enabled*/ true);
+
+        t.input(KeyEvent::new(KeyCode::Char('J'), KeyModifiers::NONE));
+
+        assert_eq!(t.text(), "hello world");
+        assert_eq!(t.vim_mode_label(), Some("Normal"));
+        assert_eq!(t.cursor(), "hello".len()); // on the inserted space
+    }
+
+    #[test]
+    fn vim_j_strips_leading_whitespace_on_next_line() {
+        let mut t = ta_with("hello\n   world");
+        t.set_cursor(/*pos*/ 0);
+        t.set_vim_enabled(/*enabled*/ true);
+
+        t.input(KeyEvent::new(KeyCode::Char('J'), KeyModifiers::NONE));
+
+        assert_eq!(t.text(), "hello world");
+        assert_eq!(t.cursor(), "hello".len()); // on the inserted space
+    }
+
+    #[test]
+    fn vim_j_strips_trailing_whitespace_then_adds_one_space() {
+        let mut t = ta_with("hello   \nworld");
+        t.set_cursor(/*pos*/ 0);
+        t.set_vim_enabled(/*enabled*/ true);
+
+        t.input(KeyEvent::new(KeyCode::Char('J'), KeyModifiers::NONE));
+
+        assert_eq!(t.text(), "hello world");
+        assert_eq!(t.cursor(), "hello".len()); // on the inserted space
+    }
+
+    #[test]
+    fn vim_j_does_not_add_space_when_next_line_is_blank() {
+        let mut t = ta_with("hello\n");
+        t.set_cursor(/*pos*/ 0);
+        t.set_vim_enabled(/*enabled*/ true);
+
+        t.input(KeyEvent::new(KeyCode::Char('J'), KeyModifiers::NONE));
+
+        assert_eq!(t.text(), "hello");
+        assert_eq!(t.cursor(), "hello".len());
+    }
+
+    #[test]
+    fn vim_j_omits_space_when_upper_line_is_empty() {
+        let mut t = ta_with("\nworld");
+        t.set_cursor(/*pos*/ 0);
+        t.set_vim_enabled(/*enabled*/ true);
+
+        t.input(KeyEvent::new(KeyCode::Char('J'), KeyModifiers::NONE));
+
+        assert_eq!(t.text(), "world");
+        assert_eq!(t.cursor(), 0);
+    }
+
+    #[test]
+    fn vim_j_omits_space_when_upper_line_is_all_whitespace() {
+        let mut t = ta_with("   \nworld");
+        t.set_cursor(/*pos*/ 0);
+        t.set_vim_enabled(/*enabled*/ true);
+
+        t.input(KeyEvent::new(KeyCode::Char('J'), KeyModifiers::NONE));
+
+        assert_eq!(t.text(), "world");
+        assert_eq!(t.cursor(), 0);
+    }
+
+    #[test]
+    fn vim_j_omits_space_when_next_line_starts_with_close_paren() {
+        let mut t = ta_with("foo\n)bar");
+        t.set_cursor(/*pos*/ 0);
+        t.set_vim_enabled(/*enabled*/ true);
+
+        t.input(KeyEvent::new(KeyCode::Char('J'), KeyModifiers::NONE));
+
+        assert_eq!(t.text(), "foo)bar");
+        assert_eq!(t.cursor(), "foo".len());
+    }
+
+    #[test]
+    fn vim_j_omits_space_when_indented_next_line_starts_with_close_paren() {
+        let mut t = ta_with("foo\n    )bar");
+        t.set_cursor(/*pos*/ 0);
+        t.set_vim_enabled(/*enabled*/ true);
+
+        t.input(KeyEvent::new(KeyCode::Char('J'), KeyModifiers::NONE));
+
+        assert_eq!(t.text(), "foo)bar");
+        assert_eq!(t.cursor(), "foo".len());
+    }
+
+    #[test]
+    fn vim_j_on_last_line_is_a_noop() {
+        let mut t = ta_with("single line");
+        t.set_cursor(/*pos*/ 3);
+        t.set_vim_enabled(/*enabled*/ true);
+
+        t.input(KeyEvent::new(KeyCode::Char('J'), KeyModifiers::NONE));
+
+        assert_eq!(t.text(), "single line");
+        assert_eq!(t.cursor(), 3);
+    }
+
+    #[test]
+    fn vim_shift_j_also_joins_lines() {
+        let mut t = ta_with("foo\nbar");
+        // Force only the shift-j binding so we exercise the shift-reporting path.
+        t.vim_normal_keymap.join_line = vec![key_hint::shift(KeyCode::Char('j'))];
+        t.set_cursor(/*pos*/ 1);
+        t.set_vim_enabled(/*enabled*/ true);
+
+        t.input(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::SHIFT));
+
+        assert_eq!(t.text(), "foo bar");
+        assert_eq!(t.cursor(), "foo".len());
+    }
+
+    #[test]
+    fn vim_uppercase_j_joins_two_lines_with_a_space() {
+        let mut t = ta_with("hello\nworld");
+        t.set_cursor(/*pos*/ 2);
+        t.set_vim_enabled(/*enabled*/ true);
+
+        t.input(KeyEvent::new(KeyCode::Char('J'), KeyModifiers::NONE));
+
+        assert_eq!(t.text(), "hello world");
+        assert_eq!(t.vim_mode_label(), Some("Normal"));
+        assert_eq!(t.cursor(), "hello".len()); // on the inserted space
+    }
+
+    #[test]
+    fn vim_uppercase_j_strips_leading_whitespace_on_next_line() {
+        let mut t = ta_with("hello\n   world");
+        t.set_cursor(/*pos*/ 0);
+        t.set_vim_enabled(/*enabled*/ true);
+
+        t.input(KeyEvent::new(KeyCode::Char('J'), KeyModifiers::NONE));
+
+        assert_eq!(t.text(), "hello world");
+        assert_eq!(t.cursor(), "hello".len()); // on the inserted space
+    }
+
+    #[test]
+    fn vim_uppercase_j_strips_trailing_whitespace_then_adds_one_space() {
+        let mut t = ta_with("hello   \nworld");
+        t.set_cursor(/*pos*/ 0);
+        t.set_vim_enabled(/*enabled*/ true);
+
+        t.input(KeyEvent::new(KeyCode::Char('J'), KeyModifiers::NONE));
+
+        assert_eq!(t.text(), "hello world");
+        assert_eq!(t.cursor(), "hello".len()); // on the inserted space
+    }
+
+    #[test]
+    fn vim_uppercase_j_does_not_add_space_when_next_line_is_blank() {
+        let mut t = ta_with("hello\n");
+        t.set_cursor(/*pos*/ 0);
+        t.set_vim_enabled(/*enabled*/ true);
+
+        t.input(KeyEvent::new(KeyCode::Char('J'), KeyModifiers::NONE));
+
+        assert_eq!(t.text(), "hello");
+        assert_eq!(t.cursor(), "hello".len());
+    }
+
+    #[test]
+    fn vim_uppercase_j_omits_space_when_upper_line_is_empty() {
+        let mut t = ta_with("\nworld");
+        t.set_cursor(/*pos*/ 0);
+        t.set_vim_enabled(/*enabled*/ true);
+
+        t.input(KeyEvent::new(KeyCode::Char('J'), KeyModifiers::NONE));
+
+        assert_eq!(t.text(), "world");
+        assert_eq!(t.cursor(), 0);
+    }
+
+    #[test]
+    fn vim_uppercase_j_omits_space_when_upper_line_is_all_whitespace() {
+        let mut t = ta_with("   \nworld");
+        t.set_cursor(/*pos*/ 0);
+        t.set_vim_enabled(/*enabled*/ true);
+
+        t.input(KeyEvent::new(KeyCode::Char('J'), KeyModifiers::NONE));
+
+        assert_eq!(t.text(), "world");
+        assert_eq!(t.cursor(), 0);
+    }
+
+    #[test]
+    fn vim_uppercase_j_omits_space_when_next_line_starts_with_close_paren() {
+        let mut t = ta_with("foo\n)bar");
+        t.set_cursor(/*pos*/ 0);
+        t.set_vim_enabled(/*enabled*/ true);
+
+        t.input(KeyEvent::new(KeyCode::Char('J'), KeyModifiers::NONE));
+
+        assert_eq!(t.text(), "foo)bar");
+        assert_eq!(t.cursor(), "foo".len());
+    }
+
+    #[test]
+    fn vim_uppercase_j_omits_space_when_indented_next_line_starts_with_close_paren() {
+        let mut t = ta_with("foo\n    )bar");
+        t.set_cursor(/*pos*/ 0);
+        t.set_vim_enabled(/*enabled*/ true);
+
+        t.input(KeyEvent::new(KeyCode::Char('J'), KeyModifiers::NONE));
+
+        assert_eq!(t.text(), "foo)bar");
+        assert_eq!(t.cursor(), "foo".len());
+    }
+
+    #[test]
+    fn vim_uppercase_j_on_last_line_is_a_noop() {
+        let mut t = ta_with("single line");
+        t.set_cursor(/*pos*/ 3);
+        t.set_vim_enabled(/*enabled*/ true);
+
+        t.input(KeyEvent::new(KeyCode::Char('J'), KeyModifiers::NONE));
+
+        assert_eq!(t.text(), "single line");
+        assert_eq!(t.cursor(), 3);
+    }
+
+    #[test]
+    fn vim_shift_j_joins_lines_with_shift_only_binding() {
+        // Bind only `shift(j)` so the uppercase-char fallback is unavailable;
+        // the shift-modifier event must match on its own.
+        let mut t = ta_with("foo\nbar");
+        t.vim_normal_keymap.join_line = vec![key_hint::shift(KeyCode::Char('j'))];
+        t.set_cursor(/*pos*/ 1);
+        t.set_vim_enabled(/*enabled*/ true);
+
+        t.input(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::SHIFT));
+
+        assert_eq!(t.text(), "foo bar");
+        assert_eq!(t.cursor(), "foo".len()); // on the inserted space
+    }
+
     fn vim_delete_word() {
         let mut t = ta_with("hello world");
         t.set_cursor(/*pos*/ 0);
