@@ -2052,7 +2052,10 @@ impl TextArea {
     }
 
     fn end_of_next_big_word_from(&self, cursor_pos: usize) -> usize {
-        let Some((first_non_ws, _)) = self.text[cursor_pos..].char_indices().skip(1).find(|&(_, ch)| !ch.is_whitespace())
+        let Some((first_non_ws, _)) = self.text[cursor_pos..]
+            .char_indices()
+            .skip(1)
+            .find(|&(_, ch)| !ch.is_whitespace())
         else {
             return self.text.len();
         };
@@ -3362,7 +3365,7 @@ mod tests {
     }
 
     #[test]
-    fn vim_d_big_w_deletes_to_next_WORD_boundary() {
+    fn vim_d_big_w_deletes_to_next_big_word_boundary() {
         let mut t = ta_with("hello, world");
         t.set_cursor(/*pos*/ 0);
         t.set_vim_enabled(/*enabled*/ true);
